@@ -3,7 +3,7 @@ import { ArrowLeft, Trash2, Share2, Copy, Check, X as XIcon } from 'lucide-react
 import { useSetlistDetail } from '../../lib/useSetlistDetail';
 import { useSupabaseTable } from '../../lib/useSupabaseTable';
 import { Song } from '../../types';
-import { ALL_KEYS } from '../../lib/chordpro';
+import { MAJOR_KEYS, MINOR_KEYS } from '../../lib/chordpro';
 import { Select, PrimaryButton, Modal, Input } from '../../components/ui';
 
 export const SetlistEditor: React.FC<{ setlistId: string; onBack: () => void }> = ({ setlistId, onBack }) => {
@@ -116,7 +116,12 @@ export const SetlistEditor: React.FC<{ setlistId: string; onBack: () => void }> 
                     onChange={(e) => updateItem(item.id, { performance_key: e.target.value })}
                     className="w-24 py-1"
                   >
-                    {ALL_KEYS.map((k) => <option key={k} value={k}>{k}</option>)}
+                    <optgroup label="Maiores">
+                      {MAJOR_KEYS.map((k) => <option key={k} value={k}>{k}</option>)}
+                    </optgroup>
+                    <optgroup label="Menores">
+                      {MINOR_KEYS.map((k) => <option key={k} value={k}>{k}</option>)}
+                    </optgroup>
                   </Select>
                 </td>
                 <td className="p-4">

@@ -19,6 +19,11 @@ const CHORD_TOKEN_REGEX =
 
 const SECTION_WORDS = /^(intro|refr[aã]o|verso|ponte|solo|final|coda|interl[uú]dio|primeira parte|segunda parte)[:.]?$/i;
 
+// Linhas de metadado que aparecem no topo de PDFs de cifra (Cifra Club e afins):
+// "Tom: G", "Capotraste: 2ª casa", "Afinação: Padrão (EADGBE)" etc.
+const METADATA_LINE_REGEX = /^\s*(tom|capotraste|afina[cç][aã]o|bpm|andamento)\s*[:\-]/i;
+const KEY_IN_TEXT_REGEX = /\btom\s*[:\-]?\s*([A-G])(#|b)?\s*(m|min|menor)?\b/i;
+
 interface PositionedItem {
   text: string;
   x: number;
@@ -106,10 +111,11 @@ function mergeChordAndLyric(chordLine: string, lyricLine: string): string {
   return result;
 }
 
-export async function importPdfToChordPro(file: File): Promise<{ body: string; titleGuess: string | null }> {
+export async function importPdfToChordPro(file: File): Promise<{ body: string; titleGuess: string | null; keyGuess: string | null }> {
   const lines = await extractLines(file);
   const out: string[] = [];
   let titleGuess: string | null = null;
+  let keyGuess: string | null = null;
 
   for (let i = 0; i < lines.length; i++) {
     const current = lines[i].raw;
@@ -117,6 +123,18 @@ export async function importPdfToChordPro(file: File): Promise<{ body: string; t
 
     if (!trimmed) {
       out.push('');
+      continue;
+    }
+
+    // Linha de metadado (Tom:, Capotraste:, Afinação:...) — extrai o tom, não vai pro corpo da cifra
+    if (METADATA_LINE_REGEX.test(trimmed)) {
+      if (!keyGuess) {
+        const keyMatch = trimmed.match(KEY_IN_TEXT_REGEX);
+        if (keyMatch) {
+          const [, letter, accidental, minorWord] = keyMatch;
+          keyGuess = `${letter}${accidental || ''}${minorWord ? 'm' : ''}`;
+        }
+      }
       continue;
     }
 
@@ -145,5 +163,5 @@ export async function importPdfToChordPro(file: File): Promise<{ body: string; t
     out.push(current);
   }
 
-  return { body: out.join('\n').replace(/\n{3,}/g, '\n\n').trim(), titleGuess };
+  return { body: out.join('\n').replace(/\n{3,}/g, '\n\n').trim(), titleGuess, keyGuess };
 }

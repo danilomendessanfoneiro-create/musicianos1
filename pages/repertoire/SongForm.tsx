@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { ArrowLeft, Info, FileUp, Loader2 } from 'lucide-react';
 import { Song } from '../../types';
-import { ALL_KEYS } from '../../lib/chordpro';
+import { MAJOR_KEYS, MINOR_KEYS, normalizeKey } from '../../lib/chordpro';
 import { Input, Select, Textarea, PrimaryButton } from '../../components/ui';
 import { ChordProRenderer } from './ChordProRenderer';
 
@@ -36,10 +36,15 @@ export const SongForm: React.FC<SongFormProps> = ({ song, onCancel, onSave }) =>
     setImportWarning(null);
     try {
       const { importPdfToChordPro } = await import('../../lib/pdfImport');
-      const { body: extracted, titleGuess } = await importPdfToChordPro(file);
+      const { body: extracted, titleGuess, keyGuess } = await importPdfToChordPro(file);
       setBody(extracted);
       if (titleGuess && !title) setTitle(titleGuess);
-      setImportWarning('Extraído do PDF — confira o alinhamento dos acordes abaixo antes de salvar, o reconhecimento é automático e pode errar em alguns pontos.');
+      if (keyGuess) setOriginalKey(normalizeKey(keyGuess));
+      setImportWarning(
+        keyGuess
+          ? `Extraído do PDF (tom detectado: ${normalizeKey(keyGuess)}) — confira o alinhamento dos acordes abaixo antes de salvar.`
+          : 'Extraído do PDF — não encontrei "Tom:" no arquivo, confira/ajuste o tom original manualmente. Revise também o alinhamento dos acordes abaixo antes de salvar.'
+      );
     } catch (err) {
       setImportWarning('Não consegui ler esse PDF. Ele precisa ter texto selecionável (não pode ser um PDF escaneado/imagem).');
     } finally {
@@ -76,7 +81,12 @@ export const SongForm: React.FC<SongFormProps> = ({ song, onCancel, onSave }) =>
           <Input placeholder="Artista / Banda original" value={artist} onChange={(e) => setArtist(e.target.value)} />
           <div className="grid grid-cols-2 gap-3">
             <Select value={originalKey} onChange={(e) => setOriginalKey(e.target.value)}>
-              {ALL_KEYS.map((k) => <option key={k} value={k}>{k}</option>)}
+              <optgroup label="Maiores">
+                {MAJOR_KEYS.map((k) => <option key={k} value={k}>{k}</option>)}
+              </optgroup>
+              <optgroup label="Menores">
+                {MINOR_KEYS.map((k) => <option key={k} value={k}>{k}</option>)}
+              </optgroup>
             </Select>
             <Input type="number" placeholder="BPM" value={bpm} onChange={(e) => setBpm(e.target.value)} />
           </div>

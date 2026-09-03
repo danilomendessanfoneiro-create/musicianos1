@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Edit, Minus, Plus, Play, Pause, Type } from 'lucide-react';
 import { Song } from '../../types';
-import { transposeChordProBody, semitoneDiff } from '../../lib/chordpro';
+import { transposeChordProBody, semitoneDiff, transposeKey } from '../../lib/chordpro';
 import { ChordProRenderer } from './ChordProRenderer';
 
 interface SongViewerProps {
@@ -22,8 +22,7 @@ export const SongViewer: React.FC<SongViewerProps> = ({ song, onBack, onEdit, in
   const rafRef = useRef<number | null>(null);
 
   const transposedBody = transposeChordProBody(song.body_chordpro, semitones);
-  const currentKeyIndex = ((['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'].indexOf(song.original_key) + semitones) % 12 + 12) % 12;
-  const currentKey = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'][currentKeyIndex];
+  const currentKey = transposeKey(song.original_key, semitones);
 
   useEffect(() => {
     if (!autoScroll) {
@@ -66,7 +65,7 @@ export const SongViewer: React.FC<SongViewerProps> = ({ song, onBack, onEdit, in
           <button onClick={() => setSemitones((s) => s - 1)} className="p-2 bg-zinc-800 rounded-lg hover:bg-zinc-700">
             <Minus className="w-4 h-4" />
           </button>
-          <span className="w-10 text-center font-bold text-indigo-400">{currentKey}</span>
+          <span className="w-12 text-center font-bold text-indigo-400">{currentKey}</span>
           <button onClick={() => setSemitones((s) => s + 1)} className="p-2 bg-zinc-800 rounded-lg hover:bg-zinc-700">
             <Plus className="w-4 h-4" />
           </button>

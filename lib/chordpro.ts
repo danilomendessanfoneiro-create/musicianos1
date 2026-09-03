@@ -75,6 +75,29 @@ export function semitoneDiff(fromKey: string, toKey: string): number {
 }
 
 export const ALL_KEYS = NOTES_SHARP;
+export const MAJOR_KEYS = NOTES_SHARP;
+export const MINOR_KEYS = NOTES_SHARP.map((n) => `${n}m`);
+
+/**
+ * Normaliza um tom pro formato usado nos seletores do app: raiz em sustenido
+ * (nunca bemol) + "m" se for menor. Ex: "Bb" -> "A#", "Gm" -> "Gm", "eb" -> "D#".
+ * Aceita "m", "min", "menor" como indicativo de tom menor.
+ */
+export function normalizeKey(key: string): string {
+  const trimmed = key.trim();
+  const isMinor = /(^|[^a-z])(m|min|menor)\b/i.test(trimmed.replace(/^[A-G](#|b)?/i, ''));
+  const rootMatch = trimmed.match(/^([A-G])(#|b)?/i);
+  if (!rootMatch) return key;
+  const root = rootMatch[0][0].toUpperCase() + rootMatch[0].slice(1);
+  const idx = noteToIndex(root);
+  if (idx === null) return key;
+  return NOTES_SHARP[idx] + (isMinor ? 'm' : '');
+}
+
+/** Transpõe um tom (ex: "G", "Am", "F#m") por N semitons — mesma regra de transposeChord */
+export function transposeKey(key: string, semitones: number, useFlats = false): string {
+  return transposeChord(key, semitones, useFlats);
+}
 
 /** Parseia o corpo em formato ChordPro simplificado em linhas estruturadas */
 export function parseChordPro(body: string): ChordProLine[] {
