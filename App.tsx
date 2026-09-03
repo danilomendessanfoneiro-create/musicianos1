@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Sidebar } from './components/Sidebar';
+import { LocalModeBanner } from './components/LocalModeBanner';
 import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { CRM } from './pages/CRM';
@@ -11,6 +12,7 @@ import { Projects } from './pages/Projects';
 import { RepertoireHome } from './pages/repertoire/RepertoireHome';
 import { Setlists } from './pages/repertoire/Setlists';
 import { SharePage } from './pages/SharePage';
+import { isSupabaseConfigured } from './lib/supabaseClient';
 import type { ViewState } from './types';
 
 const AuthenticatedApp: React.FC = () => {
@@ -30,9 +32,12 @@ const AuthenticatedApp: React.FC = () => {
   };
 
   return (
-    <div className="flex min-h-screen bg-zinc-950">
-      <Sidebar currentView={view} onChangeView={setView} />
-      <main className="flex-1 p-6 md:p-10 pt-20 md:pt-10 overflow-y-auto">{renderView()}</main>
+    <div className="flex flex-col min-h-screen bg-zinc-950">
+      {!isSupabaseConfigured && <LocalModeBanner />}
+      <div className="flex flex-1">
+        <Sidebar currentView={view} onChangeView={setView} />
+        <main className="flex-1 p-6 md:p-10 pt-20 md:pt-10 overflow-y-auto">{renderView()}</main>
+      </div>
     </div>
   );
 };
@@ -48,7 +53,18 @@ const RootGate: React.FC = () => {
     );
   }
 
-  return session ? <AuthenticatedApp /> : <Login />;
+  if (!session) {
+    return (
+      <div className="flex flex-col min-h-screen">
+        {!isSupabaseConfigured && <LocalModeBanner />}
+        <div className="flex-1">
+          <Login />
+        </div>
+      </div>
+    );
+  }
+
+  return <AuthenticatedApp />;
 };
 
 const App: React.FC = () => (

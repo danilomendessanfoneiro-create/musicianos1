@@ -1,4 +1,5 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { localSupabase } from './localBackend';
 
 const supabaseUrl = (process.env.SUPABASE_URL as string) || '';
 const supabaseAnonKey = (process.env.SUPABASE_ANON_KEY as string) || '';
@@ -9,17 +10,13 @@ export const isSupabaseConfigured =
   !supabaseUrl.includes('SEU_PROJETO') &&
   !supabaseAnonKey.includes('SUA_CHAVE');
 
-if (!isSupabaseConfigured) {
-  // eslint-disable-next-line no-console
-  console.warn(
-    'Supabase não configurado. Defina SUPABASE_URL e SUPABASE_ANON_KEY (veja README.md).'
-  );
-}
-
-// Usa uma URL válida como fallback só para o cliente não lançar erro na
-// inicialização quando não configurado — index.tsx intercepta esse caso
-// e mostra uma tela de instruções antes de qualquer chamada real ser feita.
-export const supabase = createClient(
-  isSupabaseConfigured ? supabaseUrl : 'https://placeholder.supabase.co',
-  isSupabaseConfigured ? supabaseAnonKey : 'placeholder-anon-key'
-);
+/**
+ * Se o Supabase estiver configurado, usa o cliente real.
+ * Caso contrário, usa um backend local (localStorage) com a mesma "forma"
+ * de API (auth.*, from().*, rpc()) — assim nenhuma tela precisa saber qual
+ * dos dois está em uso. Migrar pro Supabase de verdade depois é só
+ * preencher o .env.local / as env vars do Vercel.
+ */
+export const supabase: SupabaseClient | typeof localSupabase = isSupabaseConfigured
+  ? createClient(supabaseUrl, supabaseAnonKey)
+  : localSupabase;
