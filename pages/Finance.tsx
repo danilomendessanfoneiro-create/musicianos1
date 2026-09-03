@@ -1,24 +1,41 @@
 import React, { useState } from 'react';
-import { PlusCircle, Trash2 } from 'lucide-react';
+import { PlusCircle, Trash2, Link2 } from 'lucide-react';
 import { useSupabaseTable } from '../lib/useSupabaseTable';
+import { supabase } from '../lib/supabaseClient';
 import { Transaction } from '../types';
 import { Modal, Input, Select, PrimaryButton, formatCurrency } from '../components/ui';
+
+const emptyForm = {
+  date: new Date().toISOString().substring(0, 10),
+  description: '',
+  amount: '',
+  type: 'income' as 'income' | 'expense',
+  category: '',
+};
 
 export const Finance: React.FC = () => {
   const { rows: transactions, insert, remove } = useSupabaseTable<Transaction>('transactions', 'date', false);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [form, setForm] = useState({
-    date: new Date().toISOString().substring(0, 10), description: '', amount: 0, type: 'income' as 'income' | 'expense', category: '',
-  });
+  const [form, setForm] = useState(emptyForm);
 
   const income = transactions.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
   const expense = transactions.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await insert(form as Partial<Transaction>);
+    await insert({ ...form, amount: Number(form.amount) || 0, source: 'manual' } as Partial<Transaction>);
     setIsModalOpen(false);
-    setForm({ date: new Date().toISOString().substring(0, 10), description: '', amount: 0, type: 'income', category: '' });
+    setForm(emptyForm);
+  };
+
+  // Lançamentos vindos de um show (marcado como recebido/pago na aba Shows) — ao apagar aqui,
+  // desmarca o show correspondente pra não ficar com o check ativo sem o lançamento existir.
+  const handleDelete = async (t: Transaction) => {
+    if (t.gig_id && (t.source === 'gig_fee' || t.source === 'gig_cost')) {
+      const field = t.source === 'gig_fee' ? 'fee_received' : 'cost_paid';
+      await supabase.from('gigs').update({ [field]: false }).eq('id', t.gig_id);
+    }
+    await remove(t.id);
   };
 
   return (
@@ -53,14 +70,19 @@ export const Finance: React.FC = () => {
           <tbody>
             {transactions.map((t) => (
               <tr key={t.id} className="border-t border-zinc-800">
-                <td className="p-4">{new Date(t.date + 'T00:00:00').toLocaleDateString('pt-BR')}</td>
-                <td className="p-4">{t.description}</td>
+                <td className="p-4 whitespace-nowrap">{new Date(t.date + 'T00:00:00').toLocaleDateString('pt-BR')}</td>
+                <td className="p-4">
+                  <span className="flex items-center gap-1.5">
+                    {t.description}
+                    {t.gig_id && <Link2 className="w-3 h-3 text-zinc-600" aria-label="Vinculado a um show" />}
+                  </span>
+                </td>
                 <td className="p-4 text-zinc-400">{t.category}</td>
-                <td className={`p-4 font-semibold ${t.type === 'income' ? 'text-green-400' : 'text-red-400'}`}>
+                <td className={`p-4 font-semibold whitespace-nowrap ${t.type === 'income' ? 'text-green-400' : 'text-red-400'}`}>
                   {t.type === 'income' ? '+' : '-'}{formatCurrency(t.amount)}
                 </td>
                 <td className="p-4">
-                  <button onClick={() => remove(t.id)} className="text-zinc-500 hover:text-red-400">
+                  <button onClick={() => handleDelete(t)} className="text-zinc-500 hover:text-red-400">
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </td>
@@ -83,7 +105,7 @@ export const Finance: React.FC = () => {
             <Input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required />
             <Input placeholder="Descrição" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} required />
             <Input placeholder="Categoria" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
-            <Input type="number" placeholder="Valor (R$)" value={form.amount} onChange={(e) => setForm({ ...form, amount: Number(e.target.value) })} />
+            <Input type="number" step="0.01" placeholder="Valor (R$)" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
             <PrimaryButton type="submit" className="w-full">Salvar</PrimaryButton>
           </form>
         </Modal>

@@ -41,6 +41,8 @@ export interface Gig {
   fee: number;
   cost: number;
   notes: string;
+  fee_received: boolean;
+  cost_paid: boolean;
 }
 
 export interface Transaction {
@@ -51,6 +53,8 @@ export interface Transaction {
   amount: number;
   type: 'income' | 'expense';
   category: string;
+  gig_id?: string | null;
+  source?: 'manual' | 'gig_fee' | 'gig_cost';
 }
 
 export interface Project {

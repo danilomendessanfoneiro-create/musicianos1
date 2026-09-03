@@ -2,6 +2,7 @@ import React from 'react';
 import { useSupabaseTable } from '../lib/useSupabaseTable';
 import { Gig, Lead, Transaction, LeadStatus } from '../types';
 import { Card, formatCurrency } from '../components/ui';
+import { ComparisonBar } from '../components/ComparisonBar';
 
 const statusColor = (status: LeadStatus) => {
   switch (status) {
@@ -27,6 +28,13 @@ export const Dashboard: React.FC = () => {
     .filter((g) => new Date(g.date) >= new Date(new Date().toDateString()))
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
     .slice(0, 3);
+
+  // Previsto = ainda não recebido/pago | Realizado = já recebido/pago (marcado na aba Shows)
+  const previstoReceita = gigs.filter((g) => !g.fee_received).reduce((s, g) => s + (g.fee || 0), 0);
+  const realizadoReceita = gigs.filter((g) => g.fee_received).reduce((s, g) => s + (g.fee || 0), 0);
+  const previstoDespesa = gigs.filter((g) => !g.cost_paid).reduce((s, g) => s + (g.cost || 0), 0);
+  const realizadoDespesa = gigs.filter((g) => g.cost_paid).reduce((s, g) => s + (g.cost || 0), 0);
+  const maiorValor = Math.max(previstoReceita, realizadoReceita, previstoDespesa, realizadoDespesa, 1);
 
   return (
     <div className="space-y-8">
@@ -72,6 +80,26 @@ export const Dashboard: React.FC = () => {
               );
             })}
           </ul>
+        </div>
+      </div>
+
+      <div className="bg-zinc-900 p-6 rounded-2xl shadow-2xl">
+        <h3 className="text-xl font-semibold mb-1 text-teal-300">Receita e Despesa: Previsto x Realizado</h3>
+        <p className="text-zinc-500 text-sm mb-5">
+          Baseado nos shows agendados. "Previsto" é o que ainda não foi marcado como recebido/pago na aba Shows;
+          "Realizado" já caiu em Finanças.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          <div className="space-y-4">
+            <h4 className="text-sm font-semibold text-zinc-400 uppercase tracking-wide">Receita</h4>
+            <ComparisonBar label="Previsto (a receber)" value={previstoReceita} max={maiorValor} colorClass="bg-yellow-500" />
+            <ComparisonBar label="Realizado (recebido)" value={realizadoReceita} max={maiorValor} colorClass="bg-green-500" />
+          </div>
+          <div className="space-y-4">
+            <h4 className="text-sm font-semibold text-zinc-400 uppercase tracking-wide">Despesa</h4>
+            <ComparisonBar label="Previsto (a pagar)" value={previstoDespesa} max={maiorValor} colorClass="bg-orange-500" />
+            <ComparisonBar label="Realizado (pago)" value={realizadoDespesa} max={maiorValor} colorClass="bg-red-500" />
+          </div>
         </div>
       </div>
     </div>

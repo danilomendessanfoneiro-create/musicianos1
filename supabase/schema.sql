@@ -58,6 +58,8 @@ create table if not exists gigs (
   fee numeric not null default 0,
   cost numeric not null default 0,
   notes text not null default '',
+  fee_received boolean not null default false,
+  cost_paid boolean not null default false,
   created_at timestamptz not null default now()
 );
 
@@ -72,8 +74,12 @@ create table if not exists transactions (
   amount numeric not null default 0,
   type text not null check (type in ('income', 'expense')),
   category text not null default '',
+  gig_id uuid references gigs (id) on delete cascade,
+  source text not null default 'manual' check (source in ('manual', 'gig_fee', 'gig_cost')),
   created_at timestamptz not null default now()
 );
+
+create index if not exists transactions_gig_id_idx on transactions (gig_id);
 
 -- ----------------------------------------------------------------------------
 -- PROJETOS
