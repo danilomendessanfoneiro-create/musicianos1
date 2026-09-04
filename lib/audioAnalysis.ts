@@ -25,6 +25,7 @@ const WINDOW_SIZE = 4096;
 const HOP_SIZE = 2048;
 const MIN_FREQ = 55; // ~A1
 const MAX_FREQ = 1760; // ~A6
+const BASS_MAX_FREQ = 220; // ~A3 — faixa onde a fundamental do acorde costuma estar no baixo
 export const MAX_ANALYZE_SECONDS = 360; // limite de 6min por música, por performance
 
 // -------------------------- FFT (Cooley-Tukey, radix-2, in-place) --------------------------
@@ -106,7 +107,9 @@ export async function loadMonoSamples(file: File): Promise<{ samples: Float32Arr
 
 export interface ChromaFrame {
   time: number; // segundos
-  chroma: number[]; // 12 valores, normalizados (soma = 1)
+  chroma: number[]; // 12 valores, normalizados (soma = 1) — espectro completo
+  bassChroma: number[]; // 12 valores, só a faixa grave — indica a fundamental tocada no baixo
+  energy: number; // energia bruta da janela, usada pra detectar silêncio
 }
 
 export async function computeChromaFrames(
@@ -123,6 +126,7 @@ export async function computeChromaFrames(
   const binHz = sampleRate / WINDOW_SIZE;
   const minBin = Math.max(1, Math.floor(MIN_FREQ / binHz));
   const maxBin = Math.min(WINDOW_SIZE / 2 - 1, Math.ceil(MAX_FREQ / binHz));
+  const bassMaxBin = Math.min(maxBin, Math.ceil(BASS_MAX_FREQ / binHz));
 
   const totalFrames = Math.max(1, Math.floor((samples.length - WINDOW_SIZE) / HOP_SIZE));
   let frameIndex = 0;
@@ -135,15 +139,22 @@ export async function computeChromaFrames(
     fft(real, imag);
 
     const chroma = new Array(12).fill(0);
+    const bassChroma = new Array(12).fill(0);
     for (let bin = minBin; bin <= maxBin; bin++) {
-      const mag = Math.hypot(real[bin], imag[bin]);
+      // compressão em raiz quadrada: evita que um harmônico muito forte domine sozinho
+      // a classe de altura errada — deixa o perfil mais equilibrado entre as notas reais
+      const mag = Math.sqrt(Math.hypot(real[bin], imag[bin]));
       const pc = freqToPitchClass(bin * binHz);
       chroma[pc] += mag;
+      if (bin <= bassMaxBin) bassChroma[pc] += mag;
     }
-    const sum = chroma.reduce((s, v) => s + v, 0) || 1;
+    const energy = chroma.reduce((s, v) => s + v, 0);
+    const sum = energy || 1;
     const normalized = chroma.map((v) => v / sum);
+    const bassSum = bassChroma.reduce((s, v) => s + v, 0) || 1;
+    const normalizedBass = bassChroma.map((v) => v / bassSum);
 
-    frames.push({ time: start / sampleRate, chroma: normalized });
+    frames.push({ time: start / sampleRate, chroma: normalized, bassChroma: normalizedBass, energy });
     for (let pc = 0; pc < 12; pc++) overall[pc] += chroma[pc];
 
     frameIndex++;
@@ -217,15 +228,43 @@ function cosineSim(a: number[], b: number[]): number {
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
-function bestChordForFrame(chroma: number[]): string {
+function bestChordForFrame(chroma: number[], bassChroma: number[]): string {
   let best = { chord: 'N/C', score: -1 };
   for (let root = 0; root < 12; root++) {
-    const majorScore = cosineSim(chroma, rotate(MAJOR_TRIAD_TEMPLATE, root));
+    // similaridade com o "molde" da tríade (todas as notas) + peso extra se a fundamental
+    // daquele acorde é justamente a nota que está dominando o grave — é a pista mais forte
+    // de qual é o acorde de verdade, principalmente pra desempatar relativas (ex: C vs Am)
+    const bassBoost = 1 + 0.6 * bassChroma[root];
+
+    const majorScore = cosineSim(chroma, rotate(MAJOR_TRIAD_TEMPLATE, root)) * bassBoost;
     if (majorScore > best.score) best = { chord: MAJOR_KEYS[root], score: majorScore };
-    const minorScore = cosineSim(chroma, rotate(MINOR_TRIAD_TEMPLATE, root));
+
+    const minorScore = cosineSim(chroma, rotate(MINOR_TRIAD_TEMPLATE, root)) * bassBoost;
     if (minorScore > best.score) best = { chord: MINOR_KEYS[root], score: minorScore };
   }
   return best.chord;
+}
+
+/** Filtro de moda: troca cada rótulo pelo mais frequente numa janela ao redor dele —
+ * elimina trocas de 1-2 janelas isoladas (ruído) sem apagar mudanças reais e sustentadas. */
+function smoothLabels(labels: string[], radius = 3): string[] {
+  return labels.map((_, i) => {
+    const start = Math.max(0, i - radius);
+    const end = Math.min(labels.length, i + radius + 1);
+    const counts = new Map<string, number>();
+    for (let j = start; j < end; j++) {
+      counts.set(labels[j], (counts.get(labels[j]) || 0) + 1);
+    }
+    let bestLabel = labels[i];
+    let bestCount = 0;
+    for (const [label, count] of counts) {
+      if (count > bestCount) {
+        bestCount = count;
+        bestLabel = label;
+      }
+    }
+    return bestLabel;
+  });
 }
 
 export interface ChordSegment {
@@ -235,24 +274,31 @@ export interface ChordSegment {
 }
 
 const MIN_SEGMENT_SECONDS = 1.0;
+const SILENCE_ENERGY_RATIO = 0.08; // abaixo de 8% da energia máxima da faixa = silêncio/ruído
 
 export function estimateChordTimeline(frames: ChromaFrame[]): ChordSegment[] {
   if (frames.length === 0) return [];
 
+  const maxEnergy = Math.max(...frames.map((f) => f.energy), 1e-9);
+  const rawLabels = frames.map((f) =>
+    f.energy < maxEnergy * SILENCE_ENERGY_RATIO ? 'N/C' : bestChordForFrame(f.chroma, f.bassChroma)
+  );
+  const labels = smoothLabels(rawLabels);
+
   const raw: ChordSegment[] = [];
   let current: ChordSegment | null = null;
-  for (const frame of frames) {
-    const chord = bestChordForFrame(frame.chroma);
+  frames.forEach((frame, i) => {
+    const chord = labels[i];
     if (current && current.chord === chord) {
       current.end = frame.time;
     } else {
       if (current) raw.push(current);
       current = { chord, start: frame.time, end: frame.time };
     }
-  }
+  });
   if (current) raw.push(current);
 
-  // funde segmentos curtos demais (ruído) com o vizinho anterior
+  // funde segmentos curtos demais (ruído residual / respiros de silêncio) com o vizinho anterior
   const merged: ChordSegment[] = [];
   for (const seg of raw) {
     const duration = seg.end - seg.start;

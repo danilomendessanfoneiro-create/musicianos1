@@ -1,5 +1,5 @@
-import React, { useRef, useState } from 'react';
-import { Upload, Loader2, Info, Copy, Check } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Upload, Loader2, Info, Copy, Check, Play, Pause } from 'lucide-react';
 import {
   loadMonoSamples,
   computeChromaFrames,
@@ -10,11 +10,30 @@ import {
   KeyCandidate,
   ChordSegment,
 } from '../lib/audioAnalysis';
-import { PrimaryButton } from '../components/ui';
+
+const CHORD_COLORS = [
+  'bg-indigo-600', 'bg-teal-600', 'bg-rose-600', 'bg-amber-600',
+  'bg-violet-600', 'bg-emerald-600', 'bg-sky-600', 'bg-fuchsia-600',
+];
+function colorForChord(chord: string): string {
+  if (chord === 'N/C') return 'bg-zinc-800';
+  let hash = 0;
+  for (let i = 0; i < chord.length; i++) hash = (hash * 31 + chord.charCodeAt(i)) % CHORD_COLORS.length;
+  return CHORD_COLORS[hash];
+}
 
 export const AudioAnalyzer: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const activeChipRef = useRef<HTMLButtonElement>(null);
+  const timelineRef = useRef<HTMLDivElement>(null);
+
   const [fileName, setFileName] = useState<string | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioDuration, setAudioDuration] = useState<number>(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+
   const [analyzing, setAnalyzing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -23,15 +42,26 @@ export const AudioAnalyzer: React.FC = () => {
   const [chords, setChords] = useState<ChordSegment[] | null>(null);
   const [copied, setCopied] = useState(false);
 
+  useEffect(() => {
+    return () => {
+      if (audioUrl) URL.revokeObjectURL(audioUrl);
+    };
+  }, [audioUrl]);
+
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    setAudioUrl(URL.createObjectURL(file));
     setFileName(file.name);
     setError(null);
     setKeyCandidates(null);
     setChords(null);
     setTruncatedNotice(false);
     setCopied(false);
+    setCurrentTime(0);
+    setIsPlaying(false);
     setAnalyzing(true);
     setProgress(0);
 
@@ -49,6 +79,24 @@ export const AudioAnalyzer: React.FC = () => {
     }
   };
 
+  const activeIndex = chords?.findIndex((c) => currentTime >= c.start && currentTime < c.end) ?? -1;
+
+  useEffect(() => {
+    activeChipRef.current?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+  }, [activeIndex]);
+
+  const togglePlay = () => {
+    if (!audioRef.current) return;
+    if (audioRef.current.paused) audioRef.current.play();
+    else audioRef.current.pause();
+  };
+
+  const seekTo = (time: number) => {
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = time;
+    audioRef.current.play();
+  };
+
   const handleCopy = () => {
     if (!keyCandidates || !chords) return;
     const top = keyCandidates[0];
@@ -56,7 +104,7 @@ export const AudioAnalyzer: React.FC = () => {
       `Tom sugerido: ${top.key} (confiança: ${Math.round(Math.max(0, top.score) * 100)}%)`,
       '',
       'Progressão detectada:',
-      ...chords.map((c) => `${formatTime(c.start)} - ${c.chord}`),
+      ...chords.filter((c) => c.chord !== 'N/C').map((c) => `${formatTime(c.start)} - ${c.chord}`),
     ];
     navigator.clipboard.writeText(lines.join('\n'));
     setCopied(true);
@@ -70,10 +118,9 @@ export const AudioAnalyzer: React.FC = () => {
       </div>
 
       <p className="text-zinc-400 text-sm max-w-2xl">
-        Envie uma gravação e o app estima o tom e uma progressão de acordes aproximada, direto no seu
-        navegador — sem enviar o áudio pra nenhum servidor. É uma estimativa heurística (análise de
-        frequência), não uma transcrição perfeita: funciona melhor em gravações mais "limpas" (voz +
-        violão/piano) e serve como ponto de partida pra você ajustar na hora de cadastrar a cifra.
+        Envie uma gravação e o app estima o tom e a progressão de acordes, direto no seu navegador — sem
+        enviar o áudio pra nenhum servidor. Funciona melhor em gravações mais "limpas" (voz + violão/piano);
+        é uma estimativa, não uma transcrição perfeita — use como ponto de partida.
       </p>
 
       <div className="bg-zinc-900 rounded-2xl p-6">
@@ -107,48 +154,90 @@ export const AudioAnalyzer: React.FC = () => {
         )}
       </div>
 
-      {keyCandidates && chords && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-zinc-900 rounded-2xl p-6">
-            <h3 className="text-sm text-zinc-500 uppercase tracking-wide mb-4">Tom sugerido</h3>
-            <p className="text-4xl font-extrabold text-indigo-400">{keyCandidates[0].key}</p>
-            <p className="text-zinc-500 text-sm mt-1">
-              Confiança relativa: {Math.round(Math.max(0, keyCandidates[0].score) * 100)}%
-            </p>
+      {audioUrl && (
+        <audio
+          ref={audioRef}
+          src={audioUrl}
+          className="hidden"
+          onLoadedMetadata={(e) => setAudioDuration(e.currentTarget.duration)}
+          onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+        />
+      )}
 
-            <h4 className="text-xs text-zinc-500 uppercase tracking-wide mt-6 mb-2">Outros candidatos</h4>
-            <ul className="space-y-1.5">
-              {keyCandidates.slice(1, 4).map((c) => (
-                <li key={c.key} className="flex justify-between text-sm text-zinc-400">
-                  <span>{c.key}</span>
-                  <span>{Math.round(Math.max(0, c.score) * 100)}%</span>
-                </li>
-              ))}
-            </ul>
+      {keyCandidates && chords && audioUrl && (
+        <>
+          {/* Tom sugerido — só o palpite principal + 1 alternativa, sem excesso de opções */}
+          <div className="bg-zinc-900 rounded-2xl p-6 flex flex-wrap items-center gap-8">
+            <div>
+              <h3 className="text-xs text-zinc-500 uppercase tracking-wide mb-1">Tom sugerido</h3>
+              <p className="text-4xl font-extrabold text-indigo-400">{keyCandidates[0].key}</p>
+            </div>
+            {keyCandidates[1] && keyCandidates[1].score > keyCandidates[0].score * 0.85 && (
+              <div className="text-zinc-500 text-sm">
+                Se não bater, tente <span className="text-zinc-300 font-medium">{keyCandidates[1].key}</span>{' '}
+                (tom relativo, ambiguidade comum sem melodia como referência)
+              </div>
+            )}
           </div>
 
+          {/* Player com os acordes sincronizados */}
           <div className="bg-zinc-900 rounded-2xl p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-sm text-zinc-500 uppercase tracking-wide">Progressão detectada</h3>
-              <button onClick={handleCopy} className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-white">
+            <div className="flex items-center gap-4 mb-5">
+              <button
+                onClick={togglePlay}
+                className="w-12 h-12 rounded-full bg-indigo-600 hover:bg-indigo-500 flex items-center justify-center shrink-0 text-white"
+              >
+                {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+              </button>
+              <div className="flex-1">
+                <input
+                  type="range"
+                  min={0}
+                  max={audioDuration || 0}
+                  step={0.01}
+                  value={currentTime}
+                  onChange={(e) => seekTo(Number(e.target.value))}
+                  className="w-full accent-indigo-500"
+                />
+                <div className="flex justify-between text-xs text-zinc-500 mt-1">
+                  <span>{formatTime(currentTime)}</span>
+                  <span>{formatTime(audioDuration)}</span>
+                </div>
+              </div>
+              <button onClick={handleCopy} className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-white shrink-0">
                 {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
                 {copied ? 'Copiado!' : 'Copiar'}
               </button>
             </div>
-            <div className="max-h-72 overflow-y-auto space-y-1">
-              {chords.map((c, i) => (
-                <div key={i} className="flex justify-between text-sm py-1.5 px-2 rounded hover:bg-zinc-800">
-                  <span className="text-zinc-500 font-mono">{formatTime(c.start)}</span>
-                  <span className="text-teal-400 font-semibold">{c.chord}</span>
-                </div>
-              ))}
-              {chords.length === 0 && <p className="text-zinc-600 text-sm italic">Nada detectado.</p>}
+
+            <h4 className="text-xs text-zinc-500 uppercase tracking-wide mb-2">Acordes (acompanha a reprodução)</h4>
+            <div ref={timelineRef} className="flex gap-1 overflow-x-auto pb-2 -mx-1 px-1">
+              {chords.map((seg, i) => {
+                const isActive = i === activeIndex;
+                const widthPct = Math.max(4, ((seg.end - seg.start) / (audioDuration || seg.end)) * 100);
+                return (
+                  <button
+                    key={i}
+                    ref={isActive ? activeChipRef : null}
+                    onClick={() => seekTo(seg.start)}
+                    style={{ minWidth: `${Math.max(48, widthPct * 3)}px` }}
+                    className={`shrink-0 rounded-lg px-3 py-3 text-center transition-all ${colorForChord(seg.chord)} ${
+                      isActive ? 'ring-2 ring-white scale-105' : 'opacity-60 hover:opacity-90'
+                    }`}
+                  >
+                    <div className="text-white font-bold text-sm">{seg.chord}</div>
+                    <div className="text-white/70 text-[10px]">{formatTime(seg.start)}</div>
+                  </button>
+                );
+              })}
             </div>
           </div>
-        </div>
+        </>
       )}
 
-      {!analyzing && (
+      {!analyzing && !keyCandidates && (
         <p className="text-zinc-600 text-xs">
           Dica: depois de analisar, use "Copiar" e cole o resultado como referência ao criar a música em
           Repertório & Cifras — o tom sugerido já pode ir direto no campo "Tom original".

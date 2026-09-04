@@ -622,42 +622,59 @@ implementar aqui sem depender de nenhum serviço externo.
    acumulado da música inteira contra os **perfis de Krumhansl-Kessler** — perfis clássicos
    da literatura de cognição musical que descrevem o quanto cada grau da escala costuma
    ser enfatizado numa tonalidade maior ou menor. Testa as 24 rotações possíveis (12 tons
-   maiores + 12 menores) e devolve todas ordenadas por pontuação — a UI mostra a melhor e
-   mais 3 alternativas, com a pontuação como "confiança relativa" (não é uma probabilidade
-   real, é só a força da correlação).
-5. **Progressão de acordes** (`estimateChordTimeline`): para cada janela, compara o chroma
-   contra 24 "moldes" de tríade (maior e menor, pra cada uma das 12 notas — só tríade
-   simples por enquanto, sem sétimas/extensões) via similaridade de cosseno, pega o mais
-   parecido, e agrupa janelas consecutivas com o mesmo acorde em segmentos com início/fim.
-   Segmentos menores que 1 segundo são fundidos com o anterior (redução de ruído/oscilação
-   entre janelas vizinhas).
+   maiores + 12 menores) e devolve todas ordenadas por pontuação — a UI mostra a melhor e,
+   só quando a segunda opção está muito próxima da primeira (≥85% da pontuação), um aviso
+   de tom alternativo — pra não afogar a pessoa em candidatos quando o resultado já é claro.
+5. **Progressão de acordes com desambiguação por baixo** (`estimateChordTimeline`): para
+   cada janela, compara o chroma contra 24 "moldes" de tríade (maior e menor, pra cada uma
+   das 12 notas) via similaridade de cosseno — mas o placar de cada candidato leva um
+   **bônus proporcional a quanto aquela nota-fundamental domina a faixa grave da mesma
+   janela** (`bassChroma`, calculado só com bins abaixo de ~220Hz). Isso resolve o caso
+   clássico de ambiguidade entre acordes relativos (ex: C maior e Lá menor compartilham
+   duas das três notas) a favor do que está realmente tocando no baixo — testado e
+   confirmado (seção 15.3). Antes de virar segmento, a sequência de rótulos por janela
+   passa por um **filtro de moda** (`smoothLabels`, janela de 7 quadros) que troca cada
+   rótulo isolado divergente pelo mais frequente ao seu redor, eliminando flutuações de
+   1-2 janelas sem apagar mudanças reais e sustentadas. Janelas com energia muito baixa
+   (< 8% do pico da faixa) são marcadas como `N/C` (silêncio) em vez de arriscar um
+   palpite de acorde sem sinal suficiente. Só depois disso os rótulos viram segmentos
+   com início/fim, e segmentos residuais menores que 1s ainda são fundidos com o anterior.
 
 ### 15.3 Validação
 
 O motor foi testado com sinais sintéticos (soma de senoides puras simulando acordes),
 fora do navegador, via `tsx`:
 
-| Teste | Entrada | Tom top-1 detectado | Acorde dominante |
-|---|---|---|---|
-| Acorde maior | G3+B3+D4 (tríade de Sol maior) | `G` (correlação 0.83) | `G` (100% da duração) |
-| Acorde menor | A3+C4+E4 (tríade de Lá menor) | `Am` (correlação 0.89) | `Am` (único acorde detectado) |
+| Teste | Entrada | Resultado |
+|---|---|---|
+| Acorde maior | G3+B3+D4 (tríade de Sol maior) | Tom `G` (0.83) · acorde `G` em 100% da duração |
+| Acorde menor | A3+C4+E4 (tríade de Lá menor) | Tom `Am` (0.89) · único acorde detectado: `Am` |
+| Ambiguidade C/Am, baixo em C | Notas C+E+G, fundamental grave em C2 | Acorde detectado: `C` |
+| Ambiguidade C/Am, baixo em A (mesmas notas) | Notas C+E+G, fundamental grave em A2 | Acorde detectado: `Am` — confirma que o voto do baixo desempata corretamente |
+| Progressão G→D→Em→C (1,5s cada, com baixo na fundamental) | Sequência sintética de 4 acordes | Detectado: `G@0.0s \| D@1.3s \| Em@3.0s \| C@4.5s` — troca nos instantes certos |
 
-Confirma que a extração de chroma, a detecção de tom e o template matching de acordes
-estão matematicamente corretos para o caso ideal (sinal limpo, sem mistura de instrumentos
-nem ruído) — que é exatamente o cenário onde a ferramenta funciona melhor na prática
-também (gravação de voz+violão, por exemplo).
+Confirma que a extração de chroma, a detecção de tom, a desambiguação por baixo e o
+template matching de acordes estão matematicamente corretos para o caso ideal (sinal
+limpo, sem mistura de instrumentos nem ruído) — que é exatamente o cenário onde a
+ferramenta funciona melhor na prática também (gravação de voz+violão, por exemplo).
 
 ### 15.4 Interface (`pages/AudioAnalyzer.tsx`)
 
 - Upload de arquivo (`accept="audio/*"`), com barra de progresso durante a análise.
-- Card "Tom sugerido": tom mais provável + confiança, com os 3 próximos candidatos abaixo
-  (é comum a segunda opção ser a relativa menor/maior do tom principal — ambiguidade
-  esperada e normal em detecção de tom sem contexto melódico/harmônico completo).
-- Card "Progressão detectada": lista cronológica de acordes com o tempo de início de cada
-  um, com botão de copiar o resultado (tom + progressão) formatado como texto simples.
-- Aviso permanente de que é uma estimativa heurística, não uma transcrição perfeita —
-  pensada como ponto de partida pra digitar a cifra em Repertório & Cifras, não como
-  substituto da revisão humana.
+- Card "Tom sugerido": mostra só o palpite principal — uma alternativa só aparece se a
+  segunda colocada estiver muito perto da primeira (≥85% da pontuação), evitando afogar a
+  pessoa em candidatos quando o resultado já é claro (ambiguidade real de tom relativo
+  ainda pode acontecer — teoria musical, não bug).
+- **Player de áudio com os acordes sincronizados**: um `<audio>` nativo controlado por
+  `ref` (play/pause, barra de progresso arrastável), e logo abaixo uma trilha horizontal
+  com um "chip" colorido por acorde detectado — a largura de cada chip é proporcional à
+  duração do trecho, o chip correspondente ao instante atual da reprodução fica destacado
+  (`ring` branco + leve zoom) e a trilha rola automaticamente pra manter o chip ativo
+  visível (`scrollIntoView`), ao estilo letra sincronizada. Clicar em qualquer chip pula a
+  reprodução pra aquele ponto da música.
+- Botão de copiar o resultado (tom + progressão em texto simples), pra colar como
+  referência na hora de digitar a cifra em Repertório & Cifras.
+- Aviso permanente de que é uma estimativa heurística, não uma transcrição perfeita.
 
 ### 15.5 Limitações específicas desta feature
 
