@@ -301,3 +301,37 @@ export const localSupabase = {
     return { data: null, error: { message: `RPC "${fnName}" não implementada no modo local.` } };
   },
 };
+
+// -------------------------- backup / restauração --------------------------
+//
+// Os dados do modo local vivem só no localStorage deste navegador — limpar
+// "cookies e dados do site" apaga tudo. Estas duas funções exportam/importam
+// um arquivo .json com TUDO (dados das tabelas + contas locais, incluindo a
+// senha em texto puro das contas locais — o mesmo nível de segurança que o
+// modo local já tinha, então trate esse arquivo como sensível e não o
+// compartilhe).
+
+export interface LocalBackup {
+  version: 1;
+  exportedAt: string;
+  db: Record<string, Row[]>;
+  auth: LocalAuthState;
+}
+
+export function exportLocalBackup(): LocalBackup {
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    db: JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'),
+    auth: loadAuth(),
+  };
+}
+
+export function importLocalBackup(backup: LocalBackup) {
+  if (!backup || typeof backup !== 'object' || !backup.db || !backup.auth) {
+    throw new Error('Arquivo de backup inválido.');
+  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(backup.db));
+  localStorage.setItem(AUTH_KEY, JSON.stringify(backup.auth));
+}
+

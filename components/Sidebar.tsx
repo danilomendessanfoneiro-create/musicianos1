@@ -1,9 +1,12 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   LogOut, LayoutDashboard, Briefcase, DollarSign, Users, Target, Menu, X, Music, ListMusic, Waves,
+  Download, Upload,
 } from 'lucide-react';
 import type { ViewState } from '../types';
 import { useAuth } from '../contexts/AuthContext';
+import { isSupabaseConfigured } from '../lib/supabaseClient';
+import { exportLocalBackup, importLocalBackup } from '../lib/localBackend';
 
 const NavButton: React.FC<{
   icon: React.ReactNode;
@@ -31,6 +34,35 @@ export const Sidebar: React.FC<{ currentView: ViewState; onChangeView: (view: Vi
 }) => {
   const { profile, signOut } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
+  const [backupMsg, setBackupMsg] = useState<string | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
+
+  const handleExport = () => {
+    const backup = exportLocalBackup();
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `musicianos-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      importLocalBackup(JSON.parse(text));
+      setBackupMsg('Restaurado! Recarregando...');
+      setTimeout(() => window.location.reload(), 800);
+    } catch {
+      setBackupMsg('Arquivo inválido — não consegui restaurar.');
+      setTimeout(() => setBackupMsg(null), 3000);
+    } finally {
+      if (importInputRef.current) importInputRef.current.value = '';
+    }
+  };
 
   const navItems: { view: ViewState; label: string; icon: React.ReactNode }[] = [
     { view: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" /> },
@@ -89,6 +121,24 @@ export const Sidebar: React.FC<{ currentView: ViewState; onChangeView: (view: Vi
         </nav>
 
         <div className="pt-4 border-t border-zinc-700 mt-auto">
+          {!isSupabaseConfigured && (
+            <div className="mb-3 pb-3 border-b border-zinc-800 space-y-1.5">
+              <p className="text-[11px] text-zinc-500 mb-1.5">
+                Modo local: faça backup antes de limpar dados do navegador.
+              </p>
+              <button
+                onClick={handleExport}
+                className="flex items-center gap-2 w-full text-left text-xs text-zinc-400 hover:text-white px-1 py-1"
+              >
+                <Download className="w-3.5 h-3.5" /> Exportar backup
+              </button>
+              <label className="flex items-center gap-2 w-full text-left text-xs text-zinc-400 hover:text-white px-1 py-1 cursor-pointer">
+                <Upload className="w-3.5 h-3.5" /> Restaurar backup
+                <input ref={importInputRef} type="file" accept="application/json" onChange={handleImportFile} className="hidden" />
+              </label>
+              {backupMsg && <p className="text-[11px] text-teal-400 px-1">{backupMsg}</p>}
+            </div>
+          )}
           <div className="text-sm text-zinc-400 mb-2">Olá, {profile?.name || 'Músico'}</div>
           <button
             onClick={signOut}

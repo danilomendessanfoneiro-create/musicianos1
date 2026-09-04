@@ -103,6 +103,14 @@ deploy troca o backend inteiro sem alterar uma linha de UI.
   mesmo "join" que a função SQL equivalente faz no Supabase real (ver seção 8).
 - **Limitação intencional**: dados presos ao navegador/dispositivo. Não sincroniza entre
   pessoas nem entre aparelhos — é exatamente isso que o Supabase resolve depois.
+- **Backup manual** (`exportLocalBackup`/`importLocalBackup` em `lib/localBackend.ts`,
+  acionados pelos botões "Exportar backup"/"Restaurar backup" no rodapé da Sidebar,
+  visíveis só em modo local): gera um `.json` com as duas chaves de localStorage juntas
+  (dados das tabelas + contas locais, senha em texto puro incluída — mesmo nível de
+  segurança que o modo local já tinha, então esse arquivo deve ser tratado como sensível).
+  Importante existir porque "limpar cookies e dados do site" no navegador apaga o
+  `localStorage` — e sem essas duas chaves juntas no backup, restaurar só os dados sem a
+  conta local deixaria tudo com um `user_id` que não bate mais com ninguém.
 
 ### 2.3 Modo Supabase (produção)
 
@@ -534,7 +542,8 @@ no navegador.
 ## 13. Limitações conhecidas
 
 - **Modo local não sincroniza** entre dispositivos/pessoas — é só para teste. Links de
-  compartilhamento gerados em modo local só abrem no mesmo navegador.
+  compartilhamento gerados em modo local só abrem no mesmo navegador. Limpar "cookies e
+  dados do site" apaga tudo — use o botão de backup na Sidebar antes de fazer isso.
 - **Importador de PDF não é infalível**: depende de o PDF ter texto selecionável e usar
   fonte aproximadamente monoespaçada para o alinhamento acorde↔sílaba funcionar bem. PDFs
   escaneados (imagem) não são suportados — precisariam de OCR (não implementado).
