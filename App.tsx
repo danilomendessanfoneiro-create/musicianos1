@@ -24,7 +24,7 @@ const AuthenticatedApp: React.FC = () => {
       case 'dashboard': return <Dashboard />;
       case 'repertoire': return <RepertoireHome />;
       case 'setlists': return <Setlists />;
-      case 'audio-analyzer': return <AudioAnalyzer />;
+      case 'audio-analyzer': return <AudioAnalyzer onSongCreated={() => setView('repertoire')} />;
       case 'gigs': return <Gigs />;
       case 'crm': return <CRM />;
       case 'finance': return <Finance />;

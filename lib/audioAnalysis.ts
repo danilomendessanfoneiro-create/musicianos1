@@ -228,8 +228,10 @@ function cosineSim(a: number[], b: number[]): number {
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
+export const NO_CHORD_LABEL = 'N/C';
+
 function bestChordForFrame(chroma: number[], bassChroma: number[]): string {
-  let best = { chord: 'N/C', score: -1 };
+  let best = { chord: NO_CHORD_LABEL, score: -1 };
   for (let root = 0; root < 12; root++) {
     // similaridade com o "molde" da tríade (todas as notas) + peso extra se a fundamental
     // daquele acorde é justamente a nota que está dominando o grave — é a pista mais forte
@@ -281,7 +283,7 @@ export function estimateChordTimeline(frames: ChromaFrame[]): ChordSegment[] {
 
   const maxEnergy = Math.max(...frames.map((f) => f.energy), 1e-9);
   const rawLabels = frames.map((f) =>
-    f.energy < maxEnergy * SILENCE_ENERGY_RATIO ? 'N/C' : bestChordForFrame(f.chroma, f.bassChroma)
+    f.energy < maxEnergy * SILENCE_ENERGY_RATIO ? NO_CHORD_LABEL : bestChordForFrame(f.chroma, f.bassChroma)
   );
   const labels = smoothLabels(rawLabels);
 
@@ -315,4 +317,33 @@ export function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+// -------------------------- esqueleto de cifra (acordes já posicionados) --------------------------
+
+/**
+ * Monta um corpo em formato ChordPro com os acordes detectados já nas posições certas,
+ * agrupados em "linhas" de 4 acordes com marcação de tempo — pronto pra virar uma música
+ * em Repertório & Cifras. Os "____" são só placeholder: a pessoa troca pela letra de
+ * verdade ouvindo a música. Não há transcrição de letra aqui — só a estrutura harmônica.
+ */
+export function buildSkeletonChordPro(chords: ChordSegment[]): string {
+  const meaningful = chords.filter((c) => c.chord !== NO_CHORD_LABEL);
+  if (meaningful.length === 0) return '';
+
+  const CHUNK_SIZE = 4;
+  const lines: string[] = [
+    '{c: Esqueleto gerado pelo Analisador de Áudio}',
+    '{c: Troque cada "____" pela letra da música, ouvindo no player — os acordes já estão na posição certa}',
+    '',
+  ];
+
+  for (let i = 0; i < meaningful.length; i += CHUNK_SIZE) {
+    const chunk = meaningful.slice(i, i + CHUNK_SIZE);
+    lines.push(`{c: ${formatTime(chunk[0].start)}}`);
+    lines.push(chunk.map((c) => `[${c.chord}]____`).join(' '));
+    lines.push('');
+  }
+
+  return lines.join('\n').trim();
 }

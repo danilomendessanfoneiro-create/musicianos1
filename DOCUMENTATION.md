@@ -676,7 +676,32 @@ ferramenta funciona melhor na prática também (gravação de voz+violão, por e
   referência na hora de digitar a cifra em Repertório & Cifras.
 - Aviso permanente de que é uma estimativa heurística, não uma transcrição perfeita.
 
-### 15.5 Limitações específicas desta feature
+### 15.5 Do áudio direto pra uma música em Repertório & Cifras
+
+Botão **"Criar música com este resultado"**, ao lado do tom sugerido: pega o tom
+detectado e a progressão de acordes (já filtrando os trechos de silêncio) e chama
+`buildSkeletonChordPro(chords)`, que monta o corpo em ChordPro agrupando os acordes em
+blocos de 4, cada bloco com uma marcação de tempo (`{c: 1:23}`) e cada acorde seguido de
+um placeholder `____` no lugar da sílaba — ex:
+
+```
+{c: Esqueleto gerado pelo Analisador de Áudio}
+{c: Troque cada "____" pela letra da música, ouvindo no player — os acordes já estão na posição certa}
+
+{c: 0:00}
+[G]____ [D]____ [Em]____ [C]____
+```
+
+Isso cria a música de verdade (`songs`, via `useSupabaseTable<Song>`, com `original_key`
+já preenchido). **Importante: não há transcrição de letra nenhuma aqui** — os `____` são
+só marcadores de posição; a pessoa digita a letra de verdade por cima deles, abrindo a
+música em Repertório & Cifras e ouvindo a gravação (esse fluxo foi uma decisão consciente:
+transcrição automática de voz cantada é um problema de dificuldade bem maior, e a precisão
+dela depende fortemente de separar a voz do instrumental antes — que é a peça de
+separação de faixas ainda não implementada, ver seção 14). Depois de criar, um link leva
+direto pra aba Repertório & Cifras.
+
+### 15.6 Limitações específicas desta feature
 
 - Funciona bem em gravações "limpas" (poucos instrumentos, harmonia clara). Em faixas com
   mixagem densa, muita percussão ou muito processamento, a precisão cai bastante — é
@@ -684,6 +709,5 @@ ferramenta funciona melhor na prática também (gravação de voz+violão, por e
   análise espectral (sem separação de fontes prévia).
 - Só reconhece **tríades simples** (maior/menor) — não tenta identificar sétimas,
   suspensões, acordes com baixo invertido etc.
-- Não há integração automática com o cadastro de música ainda — o resultado é só copiado
-  como texto de referência; a pessoa ainda digita a cifra manualmente em
-  Repertório & Cifras usando esse resultado como apoio.
+- Não há integração automática com o cadastro de música... — **atualizado**: agora existe
+  (seção 15.5), mas só para os acordes/estrutura; a letra continua manual.

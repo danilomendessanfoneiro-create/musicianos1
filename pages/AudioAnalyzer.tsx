@@ -1,15 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Upload, Loader2, Info, Copy, Check, Play, Pause } from 'lucide-react';
+import { Upload, Loader2, Info, Copy, Check, Play, Pause, FilePlus2, ArrowRight } from 'lucide-react';
 import {
   loadMonoSamples,
   computeChromaFrames,
   estimateKey,
   estimateChordTimeline,
+  buildSkeletonChordPro,
   formatTime,
   MAX_ANALYZE_SECONDS,
   KeyCandidate,
   ChordSegment,
 } from '../lib/audioAnalysis';
+import { useSupabaseTable } from '../lib/useSupabaseTable';
+import { Song } from '../types';
+import { PrimaryButton } from '../components/ui';
 
 const CHORD_COLORS = [
   'bg-indigo-600', 'bg-teal-600', 'bg-rose-600', 'bg-amber-600',
@@ -22,11 +26,12 @@ function colorForChord(chord: string): string {
   return CHORD_COLORS[hash];
 }
 
-export const AudioAnalyzer: React.FC = () => {
+export const AudioAnalyzer: React.FC<{ onSongCreated?: () => void }> = ({ onSongCreated }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const activeChipRef = useRef<HTMLButtonElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
+  const { insert: insertSong } = useSupabaseTable<Song>('songs', 'title', true);
 
   const [fileName, setFileName] = useState<string | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -41,6 +46,8 @@ export const AudioAnalyzer: React.FC = () => {
   const [keyCandidates, setKeyCandidates] = useState<KeyCandidate[] | null>(null);
   const [chords, setChords] = useState<ChordSegment[] | null>(null);
   const [copied, setCopied] = useState(false);
+  const [creatingSong, setCreatingSong] = useState(false);
+  const [createdSongTitle, setCreatedSongTitle] = useState<string | null>(null);
 
   useEffect(() => {
     return () => {
@@ -60,6 +67,7 @@ export const AudioAnalyzer: React.FC = () => {
     setChords(null);
     setTruncatedNotice(false);
     setCopied(false);
+    setCreatedSongTitle(null);
     setCurrentTime(0);
     setIsPlaying(false);
     setAnalyzing(true);
@@ -109,6 +117,27 @@ export const AudioAnalyzer: React.FC = () => {
     navigator.clipboard.writeText(lines.join('\n'));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCreateSong = async () => {
+    if (!keyCandidates || !chords) return;
+    setCreatingSong(true);
+    const titleGuess = (fileName || 'Nova música')
+      .replace(/\.[^/.]+$/, '')
+      .replace(/[_-]+/g, ' ')
+      .trim();
+    const saved = await insertSong({
+      title: titleGuess || 'Nova música',
+      artist: '',
+      original_key: keyCandidates[0].key,
+      bpm: null,
+      tags: ['analisador-de-áudio'],
+      body_chordpro: buildSkeletonChordPro(chords),
+    });
+    setCreatingSong(false);
+    if (saved) {
+      setCreatedSongTitle(saved.title);
+    }
   };
 
   return (
@@ -169,18 +198,41 @@ export const AudioAnalyzer: React.FC = () => {
       {keyCandidates && chords && audioUrl && (
         <>
           {/* Tom sugerido — só o palpite principal + 1 alternativa, sem excesso de opções */}
-          <div className="bg-zinc-900 rounded-2xl p-6 flex flex-wrap items-center gap-8">
-            <div>
-              <h3 className="text-xs text-zinc-500 uppercase tracking-wide mb-1">Tom sugerido</h3>
-              <p className="text-4xl font-extrabold text-indigo-400">{keyCandidates[0].key}</p>
-            </div>
-            {keyCandidates[1] && keyCandidates[1].score > keyCandidates[0].score * 0.85 && (
-              <div className="text-zinc-500 text-sm">
-                Se não bater, tente <span className="text-zinc-300 font-medium">{keyCandidates[1].key}</span>{' '}
-                (tom relativo, ambiguidade comum sem melodia como referência)
+          <div className="bg-zinc-900 rounded-2xl p-6 flex flex-wrap items-center justify-between gap-6">
+            <div className="flex flex-wrap items-center gap-8">
+              <div>
+                <h3 className="text-xs text-zinc-500 uppercase tracking-wide mb-1">Tom sugerido</h3>
+                <p className="text-4xl font-extrabold text-indigo-400">{keyCandidates[0].key}</p>
               </div>
+              {keyCandidates[1] && keyCandidates[1].score > keyCandidates[0].score * 0.85 && (
+                <div className="text-zinc-500 text-sm">
+                  Se não bater, tente <span className="text-zinc-300 font-medium">{keyCandidates[1].key}</span>{' '}
+                  (tom relativo, ambiguidade comum sem melodia como referência)
+                </div>
+              )}
+            </div>
+
+            {createdSongTitle ? (
+              <div className="text-sm text-teal-400 flex items-center gap-1.5">
+                <Check className="w-4 h-4" /> "{createdSongTitle}" criada em Repertório & Cifras
+              </div>
+            ) : (
+              <PrimaryButton onClick={handleCreateSong} disabled={creatingSong} className="flex items-center gap-2 shrink-0">
+                {creatingSong ? <Loader2 className="w-4 h-4 animate-spin" /> : <FilePlus2 className="w-4 h-4" />}
+                Criar música com este resultado
+              </PrimaryButton>
             )}
           </div>
+          {createdSongTitle && (
+            <button
+              onClick={() => onSongCreated?.()}
+              className="text-zinc-400 hover:text-white text-xs flex items-center gap-1.5 -mt-3"
+            >
+              <ArrowRight className="w-3.5 h-3.5" />
+              Ir para <span className="text-indigo-400 font-medium">Repertório & Cifras</span> e digitar a letra
+              por cima dos "____" ouvindo a música no player de lá
+            </button>
+          )}
 
           {/* Player com os acordes sincronizados */}
           <div className="bg-zinc-900 rounded-2xl p-6">
