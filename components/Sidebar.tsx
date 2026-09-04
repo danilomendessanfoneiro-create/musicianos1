@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  LogOut, LayoutDashboard, Briefcase, DollarSign, Users, Target, Menu, X, Music, ListMusic,
+  LogOut, LayoutDashboard, Briefcase, DollarSign, Users, Target, Menu, X, Music, ListMusic, Waves,
 } from 'lucide-react';
 import type { ViewState } from '../types';
 import { useAuth } from '../contexts/AuthContext';
@@ -36,6 +36,7 @@ export const Sidebar: React.FC<{ currentView: ViewState; onChangeView: (view: Vi
     { view: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" /> },
     { view: 'repertoire', label: 'Repertório & Cifras', icon: <Music className="w-5 h-5" /> },
     { view: 'setlists', label: 'Setlists', icon: <ListMusic className="w-5 h-5" /> },
+    { view: 'audio-analyzer', label: 'Analisador de Áudio', icon: <Waves className="w-5 h-5" /> },
     { view: 'gigs', label: 'Shows', icon: <Briefcase className="w-5 h-5" /> },
     { view: 'crm', label: 'CRM / Contatos', icon: <Users className="w-5 h-5" /> },
     { view: 'finance', label: 'Finanças', icon: <DollarSign className="w-5 h-5" /> },

@@ -5,7 +5,8 @@ export type ViewState =
   | 'finance'
   | 'projects'
   | 'repertoire'
-  | 'setlists';
+  | 'setlists'
+  | 'audio-analyzer';
 
 export enum LeadStatus {
   NEW = 'Novo',
