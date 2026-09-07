@@ -144,7 +144,8 @@ musicianos/
 │   ├── useSetlistDetail.ts       # Hook específico: setlist + itens + links de compartilhamento
 │   ├── chordpro.ts               # Parsing de cifra ChordPro-lite + transposição de tom
 │   ├── pdfImport.ts              # Extração de texto de PDF e reconstrução em ChordPro
-│   └── audioAnalysis.ts          # FFT + chroma + detecção de tom/acordes a partir de áudio
+│   ├── audioAnalysis.ts          # FFT + chroma + detecção de tom/acordes a partir de áudio
+│   └── liveAudio.ts              # Captura ao vivo (microfone/aba) + análise contínua
 │
 ├── components/
 │   ├── ui.tsx                    # Card, Modal, Input, Select, Textarea, PrimaryButton, formatCurrency
@@ -161,6 +162,7 @@ musicianos/
 │   ├── Projects.tsx               # Projetos paralelos (gravações, clipes etc.)
 │   ├── SharePage.tsx              # Página PÚBLICA do setlist compartilhado (rota /s/:token)
 │   ├── AudioAnalyzer.tsx          # Analisador de Áudio: upload → tom + progressão de acordes
+│   ├── LiveListener.tsx           # Modo "Ouvir ao vivo": microfone ou aba do navegador
 │   └── repertoire/
 │       ├── RepertoireHome.tsx     # Biblioteca de músicas: busca, lista, entrada p/ criar/ver
 │       ├── SongForm.tsx           # Criar/editar música (editor ChordPro + importar PDF)
@@ -720,3 +722,49 @@ direto pra aba Repertório & Cifras.
   suspensões, acordes com baixo invertido etc.
 - Não há integração automática com o cadastro de música... — **atualizado**: agora existe
   (seção 15.5), mas só para os acordes/estrutura; a letra continua manual.
+
+### 15.7 Ao vivo: microfone e captura de aba (sem extensão)
+
+Arquivo: `lib/liveAudio.ts` + tela `pages/LiveListener.tsx`, acessível pelo botão "Ouvir
+ao vivo" dentro do Analisador de Áudio.
+
+Ideia: ouvir uma música tocando em qualquer lugar (YouTube, uma banda ensaiando, um
+instrumento ao vivo) e ver o **tom e o acorde atualizando em tempo real**, sem precisar de
+extensão de navegador nem gravar um arquivo primeiro.
+
+**Duas fontes de áudio:**
+- `captureMicrophone()`: `navigator.mediaDevices.getUserMedia({ audio: true })` — funciona
+  em qualquer navegador, mas capta o som ambiente (qualidade pior, pega ruído do local).
+- `captureTabAudio()`: `navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })`
+  — o diálogo nativo de "compartilhar tela/aba" do navegador, com a opção de compartilhar
+  o áudio da aba. Assim que o stream chega, as faixas de vídeo são descartadas
+  (`getVideoTracks().forEach(t => t.stop())`) — só interessa o áudio. **Só funciona bem no
+  Chrome/Edge**; Firefox e Safari têm suporte bem limitado a áudio nesse diálogo.
+
+**Pipeline de análise contínua** (`startLiveAnalyzer`): cria um `AudioContext` a partir do
+`MediaStream`, com um `ScriptProcessorNode` de 4096 amostras recebendo áudio continuamente.
+Cada bloco recebido entra num buffer circular (`ring`) de ~6 segundos. A cada ~900ms (e só
+quando já há pelo menos 1s de áudio acumulado):
+1. Calcula o chroma dos **últimos 6 segundos** (`chromaForBuffer`, a mesma função usada
+   pra arquivo, mas genérica pra qualquer tamanho de buffer) e roda `estimateKey` — janela
+   maior dá um tom mais estável, que não fica pulando a cada batida.
+2. Calcula o chroma do **último 1 segundo** separadamente e roda
+   `estimateChordFromChroma` — janela menor, mais reativa, pro acorde acompanhar as trocas.
+3. Chama `onUpdate` com `{ keyCandidates, chord, level }` — `level` é só uma estimativa
+   simples de energia pra alimentar um medidor visual de "está captando som".
+
+Detalhe técnico importante: o `ScriptProcessorNode` só é "puxado" pelo navegador (dispara
+`onaudioprocess`) se estiver conectado a um destino alcançável no grafo de áudio — por
+isso ele é ligado a um `GainNode` com `gain = 0` antes do `audioCtx.destination`, em vez de
+ir direto: mantém o processamento ativo sem tocar o áudio de volta pelos alto-falantes
+(evitando eco/duplicação, especialmente ao capturar o áudio de uma aba que já está tocando
+sozinha).
+
+**`chromaForBuffer`** e **`estimateChordFromChroma`** são generalizações/extrações de
+funções que já existiam só internamente em `audioAnalysis.ts` (usadas ali pra arquivo
+completo) — foram exportadas e adaptadas pra aceitar buffers de tamanho e taxa de
+amostragem variáveis (o microfone/captura de aba entrega áudio na taxa nativa do
+dispositivo, tipicamente 44100 ou 48000 Hz, diferente dos 11025 Hz usados na análise de
+arquivo) sem duplicar a lógica de FFT/mapeamento de frequência→nota. Validado com os
+mesmos sinais sintéticos da seção 15.3, mas em 44.1kHz e com buffer de tamanho variável —
+resultado idêntico (`G` e `Am` detectados corretamente).

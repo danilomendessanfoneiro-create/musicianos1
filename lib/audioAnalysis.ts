@@ -80,6 +80,67 @@ function freqToPitchClass(freq: number): number {
   return ((Math.round(midi) - 60) % 12 + 12) % 12; // 0 = C, ..., 11 = B (mesma ordem de NOTES_SHARP)
 }
 
+function nextPow2(n: number): number {
+  let p = 1;
+  while (p < n) p *= 2;
+  return p;
+}
+
+const hannCache = new Map<number, Float32Array>();
+function getHannWindow(size: number): Float32Array {
+  let w = hannCache.get(size);
+  if (!w) {
+    w = new Float32Array(size);
+    for (let i = 0; i < size; i++) w[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (size - 1)));
+    hannCache.set(size, w);
+  }
+  return w;
+}
+
+/**
+ * Calcula o chroma (perfil de 12 notas) de um pedaço de áudio qualquer — usado na
+ * análise ao vivo (microfone/captura de aba), onde não dá pra varrer a faixa inteira
+ * como no `computeChromaFrames` (que é pra arquivo completo, com janela fixa de 4096).
+ * Aqui a janela se adapta ao tamanho do buffer recebido (até um teto de 16384 amostras,
+ * pra não travar caso alguém passe um trecho enorme).
+ */
+export function chromaForBuffer(samples: Float32Array, sampleRate: number): { chroma: number[]; bassChroma: number[]; energy: number } {
+  const size = Math.min(nextPow2(Math.max(64, samples.length)), 16384);
+  const real = new Float32Array(size);
+  const imag = new Float32Array(size);
+  const win = getHannWindow(size);
+  const offset = Math.max(0, samples.length - size); // usa sempre o trecho mais recente
+
+  for (let i = 0; i < size; i++) {
+    const s = offset + i < samples.length ? samples[offset + i] : 0;
+    real[i] = s * win[i];
+  }
+  fft(real, imag);
+
+  const binHz = sampleRate / size;
+  const minBin = Math.max(1, Math.floor(MIN_FREQ / binHz));
+  const maxBin = Math.min(size / 2 - 1, Math.ceil(MAX_FREQ / binHz));
+  const bassMaxBin = Math.min(maxBin, Math.ceil(BASS_MAX_FREQ / binHz));
+
+  const chroma = new Array(12).fill(0);
+  const bassChroma = new Array(12).fill(0);
+  for (let bin = minBin; bin <= maxBin; bin++) {
+    const mag = Math.sqrt(Math.hypot(real[bin], imag[bin]));
+    const pc = freqToPitchClass(bin * binHz);
+    chroma[pc] += mag;
+    if (bin <= bassMaxBin) bassChroma[pc] += mag;
+  }
+  const energy = chroma.reduce((s, v) => s + v, 0);
+  const sum = energy || 1;
+  const bassSum = bassChroma.reduce((s, v) => s + v, 0) || 1;
+
+  return {
+    chroma: chroma.map((v) => v / sum),
+    bassChroma: bassChroma.map((v) => v / bassSum),
+    energy,
+  };
+}
+
 // -------------------------- decodificação + downmix/resample --------------------------
 
 export async function loadMonoSamples(file: File): Promise<{ samples: Float32Array; sampleRate: number; truncated: boolean }> {
@@ -231,6 +292,13 @@ function cosineSim(a: number[], b: number[]): number {
 export const NO_CHORD_LABEL = 'N/C';
 
 function bestChordForFrame(chroma: number[], bassChroma: number[]): string {
+  return estimateChordFromChroma(chroma, bassChroma);
+}
+
+/** Mesma lógica de template matching de `bestChordForFrame`, exportada pra uso em
+ * análise ao vivo (microfone / captura de aba), onde não há um array de ChromaFrame
+ * pré-computado — só um chroma isolado calculado na hora. */
+export function estimateChordFromChroma(chroma: number[], bassChroma: number[]): string {
   let best = { chord: NO_CHORD_LABEL, score: -1 };
   for (let root = 0; root < 12; root++) {
     // similaridade com o "molde" da tríade (todas as notas) + peso extra se a fundamental

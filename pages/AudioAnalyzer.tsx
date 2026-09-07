@@ -14,6 +14,7 @@ import {
 import { useSupabaseTable } from '../lib/useSupabaseTable';
 import { Song } from '../types';
 import { PrimaryButton } from '../components/ui';
+import { LiveListener } from './LiveListener';
 
 const CHORD_COLORS = [
   'bg-indigo-600', 'bg-teal-600', 'bg-rose-600', 'bg-amber-600',
@@ -32,6 +33,7 @@ export const AudioAnalyzer: React.FC<{ onSongCreated?: () => void }> = ({ onSong
   const activeChipRef = useRef<HTMLButtonElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const { insert: insertSong } = useSupabaseTable<Song>('songs', 'title', true);
+  const [mode, setMode] = useState<'file' | 'live'>('file');
 
   const [fileName, setFileName] = useState<string | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -152,6 +154,25 @@ export const AudioAnalyzer: React.FC<{ onSongCreated?: () => void }> = ({ onSong
         é uma estimativa, não uma transcrição perfeita — use como ponto de partida.
       </p>
 
+      <div className="flex gap-2">
+        <button
+          onClick={() => setMode('file')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium ${mode === 'file' ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'}`}
+        >
+          Analisar arquivo
+        </button>
+        <button
+          onClick={() => setMode('live')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium ${mode === 'live' ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'}`}
+        >
+          Ouvir ao vivo
+        </button>
+      </div>
+
+      {mode === 'live' && <LiveListener />}
+
+      {mode === 'file' && (
+      <>
       <div className="bg-zinc-900 rounded-2xl p-6">
         <input ref={fileInputRef} type="file" accept="audio/*" onChange={handleFile} className="hidden" id="audio-input" />
         <label
@@ -294,6 +315,8 @@ export const AudioAnalyzer: React.FC<{ onSongCreated?: () => void }> = ({ onSong
           Dica: depois de analisar, use "Copiar" e cole o resultado como referência ao criar a música em
           Repertório & Cifras — o tom sugerido já pode ir direto no campo "Tom original".
         </p>
+      )}
+      </>
       )}
     </div>
   );
