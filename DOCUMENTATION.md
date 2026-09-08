@@ -743,15 +743,15 @@ extensão de navegador nem gravar um arquivo primeiro.
 
 **Pipeline de análise contínua** (`startLiveAnalyzer`): cria um `AudioContext` a partir do
 `MediaStream`, com um `ScriptProcessorNode` de 4096 amostras recebendo áudio continuamente.
-Cada bloco recebido entra num buffer circular (`ring`) de ~6 segundos. A cada ~900ms (e só
-quando já há pelo menos 1s de áudio acumulado):
-1. Calcula o chroma dos **últimos 6 segundos** (`chromaForBuffer`, a mesma função usada
-   pra arquivo, mas genérica pra qualquer tamanho de buffer) e roda `estimateKey` — janela
-   maior dá um tom mais estável, que não fica pulando a cada batida.
-2. Calcula o chroma do **último 1 segundo** separadamente e roda
-   `estimateChordFromChroma` — janela menor, mais reativa, pro acorde acompanhar as trocas.
-3. Chama `onUpdate` com `{ keyCandidates, chord, level }` — `level` é só uma estimativa
-   simples de energia pra alimentar um medidor visual de "está captando som".
+Cada bloco recebido entra num buffer circular (`ring`) de ~1,5 segundo. A cada ~900ms (e só
+quando já há pelo menos 0,5s de áudio acumulado):
+1. Calcula o chroma do trecho recente (`chromaForBuffer`, a mesma função usada pra
+   arquivo, mas genérica pra qualquer tamanho de buffer).
+2. **Acorde atual**: `estimateChordFromChroma` nesse chroma — sempre recalculado do zero a
+   cada tick, de propósito, pra ficar reativo e acompanhar as trocas de acorde de perto.
+3. **Tom**: passa pelo `KeyStabilizer` (seção 15.7.1) em vez de ser recalculado
+   isoladamente a cada tick — é aí que mora a diferença de comportamento entre "acorde"
+   (volátil, por design) e "tom" (estável, por design).
 
 Detalhe técnico importante: o `ScriptProcessorNode` só é "puxado" pelo navegador (dispara
 `onaudioprocess`) se estiver conectado a um destino alcançável no grafo de áudio — por
@@ -765,6 +765,50 @@ funções que já existiam só internamente em `audioAnalysis.ts` (usadas ali pr
 completo) — foram exportadas e adaptadas pra aceitar buffers de tamanho e taxa de
 amostragem variáveis (o microfone/captura de aba entrega áudio na taxa nativa do
 dispositivo, tipicamente 44100 ou 48000 Hz, diferente dos 11025 Hz usados na análise de
-arquivo) sem duplicar a lógica de FFT/mapeamento de frequência→nota. Validado com os
-mesmos sinais sintéticos da seção 15.3, mas em 44.1kHz e com buffer de tamanho variável —
-resultado idêntico (`G` e `Am` detectados corretamente).
+arquivo) sem duplicar a lógica de FFT/mapeamento de frequência→nota.
+
+#### 15.7.1 `KeyStabilizer` — por que o tom não pode ser recalculado a cada tick
+
+Numa primeira versão, o tom ao vivo era recalculado do zero a cada ~900ms usando só os
+últimos segundos de áudio — o que fazia ele "piscar" entre tons vizinhos/relativos toda vez
+que a harmonia passava por um trecho ambíguo. Isso não reproduzia a metodologia do modo
+"Analisar arquivo", que soma o chroma da música **inteira** antes de decidir o tom — quanto
+mais informação acumulada, mais estável o resultado.
+
+`createKeyStabilizer` (em `lib/liveAudio.ts`, isolado do Web Audio de propósito, pra dar
+pra testar com sinais sintéticos fora do navegador) reproduz a mesma ideia ao vivo:
+
+1. **Acumula** o chroma de cada tick (ponderado pela energia daquele tick) num vetor que
+   só cresce durante a sessão — a mesma soma que o modo arquivo faz com os frames da música
+   inteira, só que ao vivo em vez de de uma vez só.
+2. **Aquecimento** (`WARMUP_SECONDS = 4`): não arrisca nenhum palpite de tom antes de pelo
+   menos 4 segundos de áudio acumulado — a interface mostra "Descobrindo..." nesse meio
+   tempo.
+3. **Confirmação com histerese** (`CONFIRM_TICKS = 3`): depois do aquecimento, o tom
+   candidato só vira o tom **mostrado** depois de aparecer como o melhor candidato em 3
+   ticks seguidos (~2,7s) — um empate passageiro entre dois tons próximos não troca o que
+   está na tela.
+4. **Reinício manual** (`resetKey()`, botão "Reiniciar tom" na interface): zera o
+   acumulado sem parar a captura — necessário porque a escuta ao vivo pode continuar
+   tocando por várias músicas diferentes seguidas, e nada detecta sozinho que a música
+   mudou.
+
+**Validação** (`push(chroma, energy)` chamado manualmente, simulando ticks em sequência,
+com sinais sintéticos gerados via `chromaForBuffer` a 44.1kHz — mesma abordagem da seção
+15.3): uma sequência de 12 ticks (~11s) tocando a progressão G→D→Em→C em loop (tom de Sol
+maior) fica em "Descobrindo..." até o tick 4 (3,6s) e a partir daí mostra `G` em todos os
+ticks seguintes, sem nenhuma oscilação; após `reset()`, uma segunda sequência em Mi menor
+passa pelo mesmo aquecimento e estabiliza em `Em` da mesma forma.
+
+#### 15.7.2 Limitações do modo ao vivo
+
+- Leva uns 4 segundos pra "descobrir" o tom (aquecimento) — proposital, é o que garante a
+  estabilidade; não dá pra ler o tom instantaneamente no primeiro segundo.
+- Se a música mudar no meio de uma sessão de escuta, o tom mostrado não se ajusta sozinho
+  (o acumulado da música anterior "puxa" o resultado) — use o botão "Reiniciar tom".
+- `ScriptProcessorNode` é uma API depreciada (mas ainda amplamente suportada) — o
+  substituto moderno seria `AudioWorkletNode`, que exige carregar um módulo `.js` à parte;
+  ficou fora por simplicidade, já que o `ScriptProcessorNode` funciona bem pra este caso de
+  uso.
+- Captura de áudio de aba com áudio via `getDisplayMedia` é essencialmente uma
+  particularidade do Chrome/Edge hoje — não é um padrão universalmente implementado.

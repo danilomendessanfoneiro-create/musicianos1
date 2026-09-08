@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Mic, MonitorUp, Square, Info } from 'lucide-react';
+import { Mic, MonitorUp, Square, Info, RotateCcw, Loader2 } from 'lucide-react';
 import { captureMicrophone, captureTabAudio, startLiveAnalyzer, LiveAnalyzerResult, LiveAnalyzerHandle } from '../lib/liveAudio';
 
 export const LiveListener: React.FC = () => {
@@ -29,6 +29,11 @@ export const LiveListener: React.FC = () => {
     handleRef.current = null;
     setSource(null);
     setResult(null);
+  };
+
+  const restartKey = () => {
+    handleRef.current?.resetKey();
+    setResult((r) => (r ? { ...r, key: null, warmingUp: true } : r));
   };
 
   if (!source) {
@@ -62,8 +67,6 @@ export const LiveListener: React.FC = () => {
     );
   }
 
-  const topKey = result?.keyCandidates?.[0];
-
   return (
     <div className="bg-zinc-900 rounded-2xl p-6 space-y-6">
       <div className="flex items-center justify-between">
@@ -74,9 +77,14 @@ export const LiveListener: React.FC = () => {
           </span>
           Ouvindo {source === 'mic' ? 'o microfone' : 'a aba compartilhada'}...
         </div>
-        <button onClick={stop} className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-red-400">
-          <Square className="w-3.5 h-3.5" /> Parar
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={restartKey} className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-white" title="Use se a música mudou">
+            <RotateCcw className="w-3.5 h-3.5" /> Reiniciar tom
+          </button>
+          <button onClick={stop} className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-red-400">
+            <Square className="w-3.5 h-3.5" /> Parar
+          </button>
+        </div>
       </div>
 
       <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
@@ -88,8 +96,14 @@ export const LiveListener: React.FC = () => {
 
       <div className="grid grid-cols-2 gap-6 text-center">
         <div>
-          <h3 className="text-xs text-zinc-500 uppercase tracking-wide mb-2">Tom atual</h3>
-          <p className="text-4xl font-extrabold text-indigo-400">{topKey?.key ?? '—'}</p>
+          <h3 className="text-xs text-zinc-500 uppercase tracking-wide mb-2">Tom</h3>
+          {result?.warmingUp || !result?.key ? (
+            <p className="text-lg text-zinc-500 flex items-center justify-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin" /> Descobrindo...
+            </p>
+          ) : (
+            <p className="text-4xl font-extrabold text-indigo-400">{result.key}</p>
+          )}
         </div>
         <div>
           <h3 className="text-xs text-zinc-500 uppercase tracking-wide mb-2">Acorde atual</h3>
@@ -97,7 +111,10 @@ export const LiveListener: React.FC = () => {
         </div>
       </div>
 
-      {!result && <p className="text-zinc-600 text-xs text-center">Aguardando som suficiente pra estimar...</p>}
+      <p className="text-zinc-600 text-xs text-center">
+        O tom "esquenta" nos primeiros segundos e depois fica firme — troque de música e clique em "Reiniciar
+        tom" se precisar recomeçar a detecção sem parar a captura.
+      </p>
     </div>
   );
 };
