@@ -12,6 +12,7 @@ import { Projects } from './pages/Projects';
 import { RepertoireHome } from './pages/repertoire/RepertoireHome';
 import { Setlists } from './pages/repertoire/Setlists';
 import { AudioAnalyzer } from './pages/AudioAnalyzer';
+import StudioVS from './pages/StudioVS';
 import { SharePage } from './pages/SharePage';
 import { isSupabaseConfigured } from './lib/supabaseClient';
 import type { ViewState } from './types';
@@ -25,6 +26,7 @@ const AuthenticatedApp: React.FC = () => {
       case 'repertoire': return <RepertoireHome />;
       case 'setlists': return <Setlists />;
       case 'audio-analyzer': return <AudioAnalyzer onSongCreated={() => setView('repertoire')} />;
+      case 'studio-vs': return <StudioVS onOpenAnalyzer={() => setView('audio-analyzer')} />;
       case 'gigs': return <Gigs />;
       case 'crm': return <CRM />;
       case 'finance': return <Finance />;

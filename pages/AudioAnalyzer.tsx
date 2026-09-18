@@ -11,6 +11,7 @@ import {
   KeyCandidate,
   ChordSegment,
 } from '../lib/audioAnalysis';
+import { takePendingAudio } from '../lib/audioHandoff';
 import { useSupabaseTable } from '../lib/useSupabaseTable';
 import { Song } from '../types';
 import { PrimaryButton } from '../components/ui';
@@ -57,10 +58,7 @@ export const AudioAnalyzer: React.FC<{ onSongCreated?: () => void }> = ({ onSong
     };
   }, [audioUrl]);
 
-  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const analyzeFile = async (file: File) => {
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     setAudioUrl(URL.createObjectURL(file));
     setFileName(file.name);
@@ -88,6 +86,29 @@ export const AudioAnalyzer: React.FC<{ onSongCreated?: () => void }> = ({ onSong
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) analyzeFile(file);
+  };
+
+  // Pista enviada pelo Estúdio VS (botão "Tom" de cada pista): fica guardada no
+  // IndexedDB até esta tela abrir, e é consumida uma única vez.
+  const analyzeFileRef = useRef(analyzeFile);
+  analyzeFileRef.current = analyzeFile;
+
+  useEffect(() => {
+    takePendingAudio()
+      .then((pending) => {
+        if (!pending) return;
+        setMode('file');
+        const name = /\.\w{2,4}$/.test(pending.name) ? pending.name : `${pending.name}.wav`;
+        analyzeFileRef.current(new File([pending.blob], name, { type: pending.blob.type || 'audio/wav' }));
+      })
+      .catch(() => {
+        /* sem pista pendente: fluxo normal da tela */
+      });
+  }, []);
 
   const activeIndex = chords?.findIndex((c) => currentTime >= c.start && currentTime < c.end) ?? -1;
 

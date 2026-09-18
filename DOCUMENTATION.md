@@ -6,7 +6,8 @@
 
 Última atualização desta documentação: cobre o estado do projeto após a reorganização
 completa (migração para Supabase/modo local, módulo de repertório, importador de PDF,
-integração Shows↔Finanças e o novo painel de Previsto x Realizado no Dashboard).
+integração Shows↔Finanças, painel de Previsto x Realizado no Dashboard, Analisador de
+Áudio — arquivo e ao vivo — e o Estúdio VS, de separação de pistas.
 
 ---
 
@@ -27,6 +28,7 @@ integração Shows↔Finanças e o novo painel de Previsto x Realizado no Dashbo
 13. [Limitações conhecidas](#13-limitações-conhecidas)
 14. [Roadmap sugerido](#14-roadmap-sugerido)
 15. [Analisador de Áudio (tom e acordes a partir do áudio)](#15-analisador-de-áudio-tom-e-acordes-a-partir-do-áudio)
+16. [Estúdio VS — separação de pistas](#16-estúdio-vs--separação-de-pistas)
 
 ---
 
@@ -130,6 +132,8 @@ musicianos/
 ├── types.ts                      # Todas as interfaces/tipos TypeScript do domínio
 ├── vite.config.ts                # Config do Vite (porta, alias @/, injeção de env vars)
 ├── vercel.json                   # Build command + rewrite de SPA para o Vercel
+├── .gitignore                    # Ignora node_modules, dist e .env.local (chaves!)
+├── .env.example                  # Modelo versionável das variáveis de ambiente
 ├── package.json / package-lock.json
 ├── tsconfig.json
 ├── .env.local                    # SUPABASE_URL / SUPABASE_ANON_KEY (local, não versionar)
@@ -145,7 +149,14 @@ musicianos/
 │   ├── chordpro.ts               # Parsing de cifra ChordPro-lite + transposição de tom
 │   ├── pdfImport.ts              # Extração de texto de PDF e reconstrução em ChordPro
 │   ├── audioAnalysis.ts          # FFT + chroma + detecção de tom/acordes a partir de áudio
-│   └── liveAudio.ts              # Captura ao vivo (microfone/aba) + análise contínua
+│   ├── liveAudio.ts              # Captura ao vivo (microfone/aba) + análise contínua
+│   ├── stemEngine.ts             # Motor de separação de pistas (STFT → HPSS → máscaras)
+│   ├── stemWorker.ts             # O motor rodando em Web Worker, com progresso
+│   ├── stemAudio.ts              # Decodificação, chamada do worker, encoder WAV, paleta
+│   ├── multitrack.ts             # Reprodutor multipista (ganho, mute, solo, tom, andamento)
+│   ├── vsLibrary.ts              # Acervo de VS em IndexedDB
+│   ├── audioHandoff.ts           # Entrega de uma pista ao Analisador de Áudio
+│   └── stemEngine.test.ts        # Teste do motor com mix sintético (npm run test:stems)
 │
 ├── components/
 │   ├── ui.tsx                    # Card, Modal, Input, Select, Textarea, PrimaryButton, formatCurrency
@@ -163,6 +174,7 @@ musicianos/
 │   ├── SharePage.tsx              # Página PÚBLICA do setlist compartilhado (rota /s/:token)
 │   ├── AudioAnalyzer.tsx          # Analisador de Áudio: upload → tom + progressão de acordes
 │   ├── LiveListener.tsx           # Modo "Ouvir ao vivo": microfone ou aba do navegador
+│   ├── StudioVS.tsx               # Estúdio VS: separação de pistas, mixer e acervo
 │   └── repertoire/
 │       ├── RepertoireHome.tsx     # Biblioteca de músicas: busca, lista, entrada p/ criar/ver
 │       ├── SongForm.tsx           # Criar/editar música (editor ChordPro + importar PDF)
@@ -749,9 +761,9 @@ quando já há pelo menos 0,5s de áudio acumulado):
    arquivo, mas genérica pra qualquer tamanho de buffer).
 2. **Acorde atual**: `estimateChordFromChroma` nesse chroma — sempre recalculado do zero a
    cada tick, de propósito, pra ficar reativo e acompanhar as trocas de acorde de perto.
-3. **Tom**: passa pelo `KeyStabilizer` (seção 15.7.1) em vez de ser recalculado
-   isoladamente a cada tick — é aí que mora a diferença de comportamento entre "acorde"
-   (volátil, por design) e "tom" (estável, por design).
+3. **Tom**: NÃO é calculado nem exibido a cada tick. O chroma de cada tick é apenas
+   somado (ponderado pela energia) num acumulado que vive enquanto a escuta durar — ver
+   seção 15.7.1.
 
 Detalhe técnico importante: o `ScriptProcessorNode` só é "puxado" pelo navegador (dispara
 `onaudioprocess`) se estiver conectado a um destino alcançável no grafo de áudio — por
@@ -767,38 +779,40 @@ amostragem variáveis (o microfone/captura de aba entrega áudio na taxa nativa 
 dispositivo, tipicamente 44100 ou 48000 Hz, diferente dos 11025 Hz usados na análise de
 arquivo) sem duplicar a lógica de FFT/mapeamento de frequência→nota.
 
-#### 15.7.1 `KeyStabilizer` — por que o tom não pode ser recalculado a cada tick
+#### 15.7.1 Tom sob demanda: por que ele não é recalculado a cada tick
 
-Numa primeira versão, o tom ao vivo era recalculado do zero a cada ~900ms usando só os
-últimos segundos de áudio — o que fazia ele "piscar" entre tons vizinhos/relativos toda vez
-que a harmonia passava por um trecho ambíguo. Isso não reproduzia a metodologia do modo
-"Analisar arquivo", que soma o chroma da música **inteira** antes de decidir o tom — quanto
-mais informação acumulada, mais estável o resultado.
+Duas versões anteriores tentaram mostrar o tom continuamente, e nenhuma ficou boa:
 
-`createKeyStabilizer` (em `lib/liveAudio.ts`, isolado do Web Audio de propósito, pra dar
-pra testar com sinais sintéticos fora do navegador) reproduz a mesma ideia ao vivo:
+1. Recalcular o tom do zero a cada ~900ms, com os últimos segundos de áudio: ele "piscava"
+   entre tons vizinhos/relativos toda vez que a harmonia passava por um trecho ambíguo.
+2. Um estabilizador com aquecimento e histerese (acumulava chroma, só trocava o tom
+   exibido depois de N ticks concordando): melhorou, mas ainda oscilava na prática — e
+   embutia uma política de confiança que a pessoa não controlava.
 
-1. **Acumula** o chroma de cada tick (ponderado pela energia daquele tick) num vetor que
-   só cresce durante a sessão — a mesma soma que o modo arquivo faz com os frames da música
-   inteira, só que ao vivo em vez de de uma vez só.
-2. **Aquecimento** (`WARMUP_SECONDS = 4`): não arrisca nenhum palpite de tom antes de pelo
-   menos 4 segundos de áudio acumulado — a interface mostra "Descobrindo..." nesse meio
-   tempo.
-3. **Confirmação com histerese** (`CONFIRM_TICKS = 3`): depois do aquecimento, o tom
-   candidato só vira o tom **mostrado** depois de aparecer como o melhor candidato em 3
-   ticks seguidos (~2,7s) — um empate passageiro entre dois tons próximos não troca o que
-   está na tela.
-4. **Reinício manual** (`resetKey()`, botão "Reiniciar tom" na interface): zera o
-   acumulado sem parar a captura — necessário porque a escuta ao vivo pode continuar
-   tocando por várias músicas diferentes seguidas, e nada detecta sozinho que a música
-   mudou.
+A versão atual descarta a ideia de "tom ao vivo" e reproduz literalmente a metodologia do
+modo "Analisar arquivo", que é o que já funcionava bem: **somar o chroma inteiro e decidir
+o tom uma vez só, no fim**. A diferença é só *quando* esse "fim" acontece — aqui, quando a
+pessoa pede.
 
-**Validação** (`push(chroma, energy)` chamado manualmente, simulando ticks em sequência,
-com sinais sintéticos gerados via `chromaForBuffer` a 44.1kHz — mesma abordagem da seção
-15.3): uma sequência de 12 ticks (~11s) tocando a progressão G→D→Em→C em loop (tom de Sol
-maior) fica em "Descobrindo..." até o tick 4 (3,6s) e a partir daí mostra `G` em todos os
-ticks seguintes, sem nenhuma oscilação; após `reset()`, uma segunda sequência em Mi menor
-passa pelo mesmo aquecimento e estabiliza em `Em` da mesma forma.
+- Durante a escuta, `startLiveAnalyzer` acumula `keyAccum[i] += chroma[i] * energy` a cada
+  tick. Nada de tom é calculado ou exibido nesse meio tempo.
+- `getKeyCandidates()` normaliza esse acumulado e chama `estimateKey` — a mesmíssima função
+  que o modo arquivo usa sobre o `overallChroma` da música inteira. Pode ser chamada
+  quantas vezes quiser, sem parar a captura: quanto mais tempo acumulado, mais confiável.
+- `reset()` zera o acumulado sem interromper a captura — necessário porque a escuta ao vivo
+  pode atravessar várias músicas seguidas, e nada detecta sozinho que a música mudou.
+- O **acorde** continua reativo, recalculado do zero a cada tick: é o dado que deve
+  acompanhar a música de perto.
+
+Na interface: "Acorde atual" grande e ao vivo, botão **"Descobrir tom"** que revela o tom
+quando a pessoa quiser, e **"Reiniciar acumulado"** ao trocar de música.
+
+**Validação** (acumulação simulada tick a tick com sinais sintéticos a 44.1kHz, mesma
+abordagem da seção 15.3): uma sessão de 10 ticks tocando G→D→Em→C em loop devolve `G` com
+correlação 0.935 (contra ~0.83 quando o mesmo trecho era avaliado isoladamente); uma sessão
+de 9 ticks em Em→G→Am devolve `Em` com 0.910. A margem para o segundo colocado fica bem
+mais larga, que é exatamente o efeito de decidir com a sessão inteira em vez de com uma
+janela.
 
 #### 15.7.2 Limitações do modo ao vivo
 
@@ -812,3 +826,94 @@ passa pelo mesmo aquecimento e estabiliza em `Em` da mesma forma.
   uso.
 - Captura de áudio de aba com áudio via `getDisplayMedia` é essencialmente uma
   particularidade do Chrome/Edge hoje — não é um padrão universalmente implementado.
+
+---
+
+## 16. Estúdio VS — separação de pistas
+
+Módulo que separa uma gravação em quatro pistas (voz, harmonia, baixo, bateria), com mixer
+de ensaio, transposição, acervo local e exportação. Tudo roda no navegador: o áudio não sai
+da máquina do usuário.
+
+Arquivos: `lib/stemEngine.ts`, `lib/stemWorker.ts`, `lib/stemAudio.ts`, `lib/multitrack.ts`,
+`lib/vsLibrary.ts`, `lib/audioHandoff.ts`, `pages/StudioVS.tsx` e o teste
+`lib/stemEngine.test.ts`. Nenhuma dependência nova — só React, Web Audio e IndexedDB.
+
+### 16.1 Como o motor separa (`lib/stemEngine.ts`)
+
+DSP puro, sem DOM, processando em blocos de 20 segundos para não estourar a memória em
+músicas longas:
+
+1. **STFT** dos canais L e R — janela Hann de 2048 com salto de 512.
+2. **HPSS** (*harmonic-percussive source separation*): a mediana ao longo do **tempo** isola
+   o que é estável em frequência (harmônico); a mediana ao longo da **frequência** isola o
+   que é largo em banda (percussivo).
+3. **Bateria** = os bins onde o percussivo domina o harmônico por uma margem clara. A
+   margem existe porque, sem ela, voz com vibrato era confundida com ataque de bateria —
+   metade da voz vazava para a pista de bateria nos testes do módulo.
+4. O que sobra se divide por **frequência** (abaixo de 180 Hz → baixo) e por **coerência
+   estéreo** (centralizado → voz; panoramizado → harmonia).
+5. As quatro máscaras somam exatamente 1, então a soma das pistas reconstrói o mix original
+   — esse é o teste de sanidade do módulo.
+
+### 16.2 Web Worker (`lib/stemWorker.ts`, `lib/stemAudio.ts`)
+
+O motor roda num Web Worker para não travar a interface, com progresso reportado por
+mensagem. O worker é criado com
+`new Worker(new URL('./stemWorker.ts', import.meta.url), { type: 'module' })` — o Vite
+empacota sozinho, sem plugin; no build de produção ele vira um chunk separado
+(confirmado: `dist/assets/stemWorker-*.js`).
+
+`stemAudio.ts` cuida da decodificação, da chamada ao worker, da codificação WAV (PCM 16
+bits, com um modo compacto mono/22 kHz que reduz cerca de 4× o tamanho) e da paleta das
+pistas.
+
+**Ponto de troca para um motor de nuvem**: `separateBuffer(buffer, options, onProgress)` é a
+única função que a tela conhece. Para usar Demucs num servidor próprio ou uma API paga,
+basta reimplementar essa função mantendo a assinatura — nada na tela, no reprodutor ou no
+acervo muda. É o gancho pronto para a separação "tipo Moises" que ficou fora do escopo na
+seção 14.
+
+### 16.3 Reprodutor, acervo e integração
+
+- `lib/multitrack.ts`: reprodutor multipista com ganho, mute, solo, tom, andamento e
+  medidores por pista.
+- `lib/vsLibrary.ts`: acervo em IndexedDB (`localStorage` não aguenta áudio), com metadados
+  num índice separado para a listagem carregar sem tocar nos blobs. `exportProject()` já
+  empacota metadados + blobs no formato que serviria de payload para o Supabase Storage.
+- `lib/audioHandoff.ts`: o botão "Tom" de cada pista grava um pacote único no IndexedDB e o
+  `AudioAnalyzer` o consome (e apaga) ao montar. Como o Musicianos navega por estado
+  (`ViewState`) e não por URL, o `StudioVS` recebe uma prop `onOpenAnalyzer` e quem troca de
+  tela é o `App.tsx` — a versão original do módulo usava `window.location.hash`, adaptado na
+  integração.
+- Navegação: `ViewState` ganhou `'studio-vs'`, a `Sidebar` ganhou o item "Estúdio VS" e o
+  `App.tsx` o `case` correspondente.
+
+### 16.4 Medições (`npm run test:stems`)
+
+O teste monta um mix sintético de fontes conhecidas (baixo, voz com vibrato real, bateria,
+harmonia) e mede para onde a energia de cada fonte foi parar. Rodando dentro deste projeto:
+
+| Fonte | Vai para a pista certa | Observação |
+|---|---|---|
+| Voz | 97% | 3% escapa para harmonia |
+| Bateria | 98% | |
+| Baixo | 100% | |
+| Harmonia | 98% | |
+
+Reconstrução (soma das 4 pistas vs. mix original): **139,2 dB de SNR**. Voz que sobra no
+instrumental: **4%**. Processamento: 0,78s para 4 segundos de áudio estéreo a 44,1 kHz.
+
+### 16.5 Limitações conhecidas
+
+- **Velocidade**: cerca de um quarto da duração da música — uma faixa de 4 minutos leva por
+  volta de 1 minuto.
+- **Tom e andamento andam juntos**: a transposição usa `playbackRate`, que altera os dois.
+  Separá-los pede um phase vocoder — próximo passo natural.
+- **Fontes centralizadas que não são voz** (piano ou violão no centro da mixagem) vão em
+  parte para a pista de voz. É o limite de qualquer método baseado em coerência estéreo.
+- **Gravação mono não produz pista de voz**: sem imagem estéreo não há o que comparar. O
+  app continua separando bateria e baixo normalmente.
+- **Espaço em disco**: o navegador costuma liberar alguns GB por domínio. O modo compacto
+  (mono, 22 kHz) reduz cerca de 4× e é suficiente para ensaio; desligue-o para exportar uma
+  pista que vai para um DAW.

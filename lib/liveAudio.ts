@@ -1,21 +1,19 @@
 // ============================================================================
 // Análise ao vivo: pega áudio do microfone OU de uma aba do navegador
 // (compartilhamento de tela com "áudio da guia" ativado — sem precisar de
-// extensão) e roda o mesmo motor de chroma/tom/acorde de audioAnalysis.ts
-// continuamente, atualizando o resultado a cada ~1 segundo.
+// extensão) e roda o mesmo motor de chroma/acorde de audioAnalysis.ts.
 //
-// O ACORDE atual é sempre calculado "fresco" a cada tick (reativo, acompanha
-// a música de perto). Já o TOM não pode ser recalculado do zero a cada tick
-// isoladamente — isso deixa ele oscilando entre tons vizinhos/relativos a
-// cada instante de ambiguidade. Em vez disso, o `KeyStabilizer` ACUMULA o
-// chroma de cada tick (a mesma "matéria-prima" usada pra identificar o
-// acorde) ao longo da sessão — exatamente como o modo "Analisar arquivo" soma
-// o chroma da música inteira antes de estimar o tom — e só "confirma" um tom
-// novo depois que ele se mantém como melhor candidato por alguns ticks
-// seguidos. Isso reproduz, ao vivo, a mesma metodologia usada no arquivo.
+// O ACORDE é sempre calculado "fresco" a cada tick (~1x/seg) — reativo, pra
+// acompanhar a música de perto. O TOM não é recalculado nem mostrado
+// continuamente (isso deixava ele oscilando entre tons vizinhos/relativos a
+// cada trecho ambíguo). Em vez disso, TUDO que já foi ouvido vai sendo somado
+// num acumulado de chroma em segundo plano — exatamente como o modo
+// "Analisar arquivo" soma a música inteira antes de decidir o tom — e o tom
+// só é calculado quando a pessoa pede ("Descobrir tom"), usando esse
+// acumulado inteiro de uma vez, igual no arquivo.
 // ============================================================================
 
-import { chromaForBuffer, estimateChordFromChroma, estimateKey } from './audioAnalysis';
+import { chromaForBuffer, estimateChordFromChroma, estimateKey, KeyCandidate } from './audioAnalysis';
 
 export async function captureMicrophone(): Promise<MediaStream> {
   return navigator.mediaDevices.getUserMedia({ audio: true });
@@ -40,72 +38,23 @@ export async function captureTabAudio(): Promise<MediaStream> {
   return new MediaStream(audioTracks);
 }
 
-const WARMUP_SECONDS = 4; // tempo mínimo ouvindo antes de arriscar um palpite de tom
-const CONFIRM_TICKS = 3; // nº de vezes seguidas que um candidato precisa vencer pra "virar" o tom mostrado
-
-/**
- * Acumula chroma ao longo do tempo (como o modo arquivo faz com a música inteira) e só
- * "confirma" uma troca de tom depois que o novo candidato se mantém à frente por
- * `CONFIRM_TICKS` chamadas seguidas — evita ficar piscando entre tons vizinhos/relativos.
- * Isolado do resto (sem Web Audio) de propósito, pra dar pra testar com sinais sintéticos.
- */
-export function createKeyStabilizer(tickSeconds: number) {
-  let accum = new Array(12).fill(0);
-  let elapsed = 0;
-  let lastTopKey: string | null = null;
-  let stableCount = 0;
-  let confirmedKey: string | null = null;
-
-  function push(chroma: number[], energy: number): { key: string | null; warmingUp: boolean } {
-    if (energy > 0) {
-      for (let i = 0; i < 12; i++) accum[i] += chroma[i] * energy;
-      elapsed += tickSeconds;
-    }
-    if (elapsed < WARMUP_SECONDS) {
-      return { key: null, warmingUp: true };
-    }
-
-    const sum = accum.reduce((s, v) => s + v, 0) || 1;
-    const normalized = accum.map((v) => v / sum);
-    const top = estimateKey(normalized)[0].key;
-
-    if (top === lastTopKey) {
-      stableCount++;
-    } else {
-      lastTopKey = top;
-      stableCount = 1;
-    }
-    if (!confirmedKey || stableCount >= CONFIRM_TICKS) confirmedKey = top;
-
-    return { key: confirmedKey, warmingUp: false };
-  }
-
-  function reset() {
-    accum = new Array(12).fill(0);
-    elapsed = 0;
-    lastTopKey = null;
-    stableCount = 0;
-    confirmedKey = null;
-  }
-
-  return { push, reset };
-}
-
 export interface LiveAnalyzerResult {
-  key: string | null; // tom "confirmado" — null enquanto ainda está esquentando
-  warmingUp: boolean;
-  chord: string; // sempre reativo, não passa pelo estabilizador
+  chord: string; // sempre reativo
   level: number; // 0..1 — só pra um medidor visual de "está captando som"
 }
 
 export interface LiveAnalyzerHandle {
   stop: () => void;
-  /** Reinicia só o acúmulo de tom (útil se a música mudou no meio da escuta) — não
-   * interrompe a captura de áudio. */
-  resetKey: () => void;
+  /** Zera o acumulado usado pro tom (útil se a música mudou no meio da escuta) — não
+   * interrompe a captura de áudio nem afeta o acorde ao vivo. */
+  reset: () => void;
+  /** Calcula o tom com TUDO que foi acumulado até agora — mesma lógica do modo arquivo
+   * (soma o chroma inteiro, sem janela deslizante), só que chamada sob demanda em vez
+   * de no fim de um arquivo já pronto. Pode ser chamada a qualquer momento, sem parar. */
+  getKeyCandidates: () => KeyCandidate[];
 }
 
-const CHORD_WINDOW_SECONDS = 1; // janela usada tanto pro acorde quanto como "amostra" acumulada pro tom
+const CHORD_WINDOW_SECONDS = 1;
 const UPDATE_INTERVAL_MS = 900;
 
 export function startLiveAnalyzer(stream: MediaStream, onUpdate: (result: LiveAnalyzerResult) => void): LiveAnalyzerHandle {
@@ -120,8 +69,7 @@ export function startLiveAnalyzer(stream: MediaStream, onUpdate: (result: LiveAn
   const ring = new Float32Array(maxBufferLen);
   let ringLen = 0;
   let lastUpdate = 0;
-
-  const stabilizer = createKeyStabilizer(UPDATE_INTERVAL_MS / 1000);
+  let keyAccum = new Array(12).fill(0);
 
   processor.onaudioprocess = (e) => {
     const input = e.inputBuffer.getChannelData(0);
@@ -141,19 +89,19 @@ export function startLiveAnalyzer(stream: MediaStream, onUpdate: (result: LiveAn
     if (now - lastUpdate < UPDATE_INTERVAL_MS || ringLen < sampleRate * 0.5) return;
     lastUpdate = now;
 
-    const window = ring.subarray(0, ringLen);
-    const { chroma, bassChroma, energy } = chromaForBuffer(window, sampleRate);
+    const win = ring.subarray(0, ringLen);
+    const { chroma, bassChroma, energy } = chromaForBuffer(win, sampleRate);
     const level = Math.min(1, energy * 4);
 
     if (energy < 1e-6) {
-      onUpdate({ key: null, warmingUp: true, chord: 'N/C', level });
+      onUpdate({ chord: 'N/C', level });
       return;
     }
 
     const chord = estimateChordFromChroma(chroma, bassChroma);
-    const { key, warmingUp } = stabilizer.push(chroma, energy);
+    for (let i = 0; i < 12; i++) keyAccum[i] += chroma[i] * energy;
 
-    onUpdate({ key, warmingUp, chord, level });
+    onUpdate({ chord, level });
   };
 
   // ScriptProcessorNode só processa se estiver conectado a um destino "alcançável" —
@@ -173,7 +121,12 @@ export function startLiveAnalyzer(stream: MediaStream, onUpdate: (result: LiveAn
       audioCtx.close();
       stream.getTracks().forEach((t) => t.stop());
     },
-    resetKey: () => stabilizer.reset(),
+    reset: () => {
+      keyAccum = new Array(12).fill(0);
+    },
+    getKeyCandidates: () => {
+      const sum = keyAccum.reduce((s, v) => s + v, 0) || 1;
+      return estimateKey(keyAccum.map((v) => v / sum));
+    },
   };
 }
-
