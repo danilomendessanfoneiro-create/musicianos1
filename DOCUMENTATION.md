@@ -848,13 +848,23 @@ músicas longas:
 2. **HPSS** (*harmonic-percussive source separation*): a mediana ao longo do **tempo** isola
    o que é estável em frequência (harmônico); a mediana ao longo da **frequência** isola o
    que é largo em banda (percussivo).
-3. **Bateria** = os bins onde o percussivo domina o harmônico por uma margem clara. A
-   margem existe porque, sem ela, voz com vibrato era confundida com ataque de bateria —
-   metade da voz vazava para a pista de bateria nos testes do módulo.
-4. O que sobra se divide por **frequência** (abaixo de 180 Hz → baixo) e por **coerência
-   estéreo** (centralizado → voz; panoramizado → harmonia).
-5. As quatro máscaras somam exatamente 1, então a soma das pistas reconstrói o mix original
+3. **Gate de ataque grave**: a mediana sozinha erra o bumbo — o corpo dele é tonal e dura
+   mais que a janela de mediana, então parece "sustentado" em vez de "transiente". Um
+   envelope de energia na faixa grave, comparado quadro a quadro, mantém essa faixa marcada
+   como percussiva durante a decaída natural de um golpe (ver 16.4.2).
+4. **Bateria** = os bins onde o percussivo (já com o gate acima aplicado) domina o harmônico
+   por uma margem clara. A margem existe porque, sem ela, voz com vibrato era confundida com
+   ataque de bateria — metade da voz vazava para a pista de bateria nos testes do módulo.
+5. O que sobra se divide por **frequência** (abaixo de 180 Hz → baixo) e por **coerência
+   estéreo** (centralizado → voz; panoramizado → harmonia), com um peso adicional que reduz
+   a confiança de "voz" fora da faixa de frequência onde uma voz cantada costuma se
+   concentrar (~140Hz–3800Hz) — o que sai da voz por esse peso volta pra harmonia.
+6. As quatro máscaras somam exatamente 1, então a soma das pistas reconstrói o mix original
    — esse é o teste de sanidade do módulo.
+
+Nenhum desses passos modela **timbre** — só posição no tempo, posição em frequência e
+posição estéreo. Isso tem um teto real, investigado e documentado com números na seção
+16.4.
 
 ### 16.2 Web Worker (`lib/stemWorker.ts`, `lib/stemAudio.ts`)
 
@@ -891,18 +901,118 @@ seção 14.
 
 ### 16.4 Medições (`npm run test:stems`)
 
-O teste monta um mix sintético de fontes conhecidas (baixo, voz com vibrato real, bateria,
-harmonia) e mede para onde a energia de cada fonte foi parar. Rodando dentro deste projeto:
+O teste roda **dois cenários**. O primeiro (fontes isoladas — voz seca centralizada,
+guitarras hard-panned, bateria isolada, baixo) serve só de trava de regressão grosseira:
+se isso quebrar, algo está muito errado. Ele nunca mudou:
 
-| Fonte | Vai para a pista certa | Observação |
+| Fonte | Vai para a pista certa |
+|---|---|
+| Voz | 97% |
+| Bateria | 97% |
+| Baixo | 100% |
+| Outros | 98% |
+
+Reconstrução: **139,2 dB de SNR**. Esse cenário, sozinho, é otimista demais — foi o que
+levou ao problema relatado por quem usou o app com música de verdade (seção 16.4.1).
+
+#### 16.4.1 O problema relatado, investigado com números
+
+Depois de testar com música real, vieram dois relatos: **voz vazando em todas as pistas**
+e **bateria/percussão não separando**. Um teste com fontes fáceis (como o de cima) não
+reproduz isso — então o primeiro passo foi montar um **segundo cenário**, mais sujo, mais
+parecido com uma mixagem de verdade: voz com reverb/duplicação (largura de estéreo real,
+não 100% centralizada), um kit de bateria completo (bumbo com corpo tonal + clique, caixa,
+chimbal em colcheias), baixo sustentado, um pad panorizado e — o caso difícil de propósito —
+um **violão centralizado tocando no tempo**, harmônico e percussivo ao mesmo tempo.
+
+Rodando esse cenário contra o motor **antes** de qualquer correção:
+
+| Fonte | Pista certa | Pra onde foi o resto |
 |---|---|---|
-| Voz | 97% | 3% escapa para harmonia |
-| Bateria | 98% | |
-| Baixo | 100% | |
-| Harmonia | 98% | |
+| Bateria (kit completo) | **27%** | 74% foi pro baixo |
+| Pad panorizado | 56%¹ | 35% foi pra voz |
+| Violão centralizado percussivo | 0% (other) | 96% foi pra bateria |
 
-Reconstrução (soma das 4 pistas vs. mix original): **139,2 dB de SNR**. Voz que sobra no
-instrumental: **4%**. Processamento: 0,78s para 4 segundos de áudio estéreo a 44,1 kHz.
+¹ o pad já media 56%, não 98% como no cenário fácil — a diferença de metodologia entre os
+dois cenários (ver nota abaixo) já mostra o quanto o cenário "fácil" era otimista.
+
+Duas causas, cada uma investigada e confirmada isoladamente:
+
+**1) O bumbo (kick) vai majoritariamente pro baixo.** A separação harmônico/percussivo do
+HPSS usa a mediana num raio de tempo (`harmonicKernel`, ~200ms) pra decidir "isso é
+sustentado" vs. a mediana num raio de frequência pra decidir "isso é largo-banda". Um bumbo
+de verdade tem um clique de ataque largo-banda (dura poucos milissegundos — aí sim é lido
+como percussivo) seguido de um corpo tonal grave que **dura mais que a janela de mediana no
+tempo** — nesse trecho, ele parece "sustentado" (harmônico), e por estar abaixo do corte de
+grave, cai na pista de baixo. Confirmado isolando o bumbo sozinho e medindo onde a energia
+foi parar antes e depois da correção.
+
+**2) O violão centralizado confunde as duas separações ao mesmo tempo.** Ele tem ataque
+percussivo (broadband, como um tambor) E é harmônico (tem afinação) E está centralizado
+(como a voz) — três sinais que o motor usa pra decidir "bateria" ou "voz" apontam de jeitos
+diferentes dependendo do instante. O resultado é ele se espalhar pelas quatro pistas,
+inclusive nas onde não devia.
+
+#### 16.4.2 O que foi corrigido
+
+**Gate de ataque grave** (`stemEngine.ts`, antes da montagem das máscaras): em vez de
+confiar só na mediana por bin, um envelope de energia é calculado só na faixa grave
+(a mesma faixa do corte de baixo) e comparado quadro a quadro. Quando ele sobe rápido
+demais pra ser um dedilhado de baixo (limiar de 1,5× o quadro anterior — valor escolhido
+testando 1.3×/1.5×/1.7×/1.9× nesse mesmo cenário e comparando captura do bumbo vs.
+vazamento do baixo), a faixa grave é marcada como percussiva por uma janela de decaída de
+~100ms (também testada — 100/140/180/220ms), como o gate de um sampler de bateria,
+independente do que a mediana por bin diria sozinha ali. Isso é aplicado só na faixa
+grave — o resto do espectro continua decidido só pela mediana.
+
+**Faixa de frequência vocal**: a separação voz/"outros" hoje é decidida só pela posição
+estéreo (centralizado = voz) — não existe nenhum sinal de timbre. Foi adicionado um peso
+que reduz a confiança de "voz" fora da faixa onde uma voz cantada costuma se concentrar
+(cheio entre ~140Hz–3800Hz, com rolloff suave até 90Hz e até 6500Hz) — o que sai da máscara
+de voz nessa faixa volta pra "outros" (a soma das quatro máscaras continua sendo
+exatamente 1 em todo bin, então a reconstrução nunca perde precisão por causa disso). Esse
+peso ajuda quando o conteúdo interferente está claramente fora do registro vocal, mas
+**não resolve** o caso em que ele está no mesmo registro — um violão tocando nas mesmas
+notas que a voz tem exatamente a mesma "cara" espectral ali, e frequência sozinha não
+distingue os dois (só timbre distingue, e o motor não modela timbre).
+
+Depois das duas correções, o mesmo cenário sujo:
+
+| Fonte | Antes | Depois |
+|---|---|---|
+| Bateria (kit completo) | 27% | **66%** |
+| Baixo (vazando pra bateria, efeito colateral do gate) | ~1% | 15% (ainda majoritariamente limpo: 86%) |
+| Voz (registro mais alto, longe do cruzamento com o baixo) | — | **91%** |
+| Pad panorizado | 56% | 56% (sem mudança — o vazamento dele é por coerência residual, não por registro) |
+| Violão centralizado percussivo | 0% em "other" | continua indo majoritariamente pra bateria (96%) — limite conhecido, não resolvido |
+
+Reconstrução, medida sem as bordas do buffer (a janela STFT/OLA perde precisão nas beiradas
+por ter menos quadros sobrepostos contribuindo ali, o que não tem relação com a qualidade
+da separação): **138,9–139,0 dB de SNR**, igual ao cenário fácil — confirma que a garantia
+matemática (as 4 máscaras somam exatamente 1 em todo bin) continua intacta.
+
+#### 16.4.3 O que ficou sem solução (limite real da técnica, não falta de ajuste)
+
+- **Instrumento harmônico centralizado com ataque percussivo** (violão, piano tocando no
+  tempo) continua confundindo o motor — ele tem as três características (harmônico,
+  percussivo, centralizado) que as heurísticas usam, apontando em direções diferentes.
+- **Voz num registro grave** (masculina grave, ou harmonia baixa) que se aproxima da faixa
+  de frequência do baixo ainda vaza pro baixo — testado isoladamente: uma voz de teste em
+  220Hz (bem em cima do cruzamento) perdeu ~45% da energia pro baixo; a mesma voz em 330Hz
+  (fora da faixa de cruzamento) ficou em 91%–95% correta. É um limite de frequência
+  compartilhada entre bumbo/baixo e voz grave — não dá pra separar por frequência quando as
+  duas fontes ocupam a mesma faixa; só timbre resolveria isso.
+- **Pad panorizado ainda perde ~1/3 pra voz** mesmo com coerência estéreo genuinamente
+  baixa — sobra alguma correlação residual entre os canais (vazamento espectral entre bins
+  vizinhos quando duas notas próximas caem em bins adjacentes da FFT).
+
+Esses três casos são exatamente onde uma rede neural treinada em timbre (Demucs e
+similares) supera qualquer heurística baseada em posição estéreo + envelope de energia —
+é o teto de qualidade desta arquitetura, documentado em `stemAudio.ts` como o ponto de
+troca caso um motor de nuvem seja integrado no futuro (seção 16.2).
+
+Processamento: ~1,3s para 8 segundos de áudio estéreo a 44,1kHz (cenário 2), ~0,9s para os
+4 segundos do cenário 1 — a mesma faixa de ~1/4 da duração da música mencionada abaixo.
 
 ### 16.5 Limitações conhecidas
 
@@ -910,8 +1020,10 @@ instrumental: **4%**. Processamento: 0,78s para 4 segundos de áudio estéreo a 
   volta de 1 minuto.
 - **Tom e andamento andam juntos**: a transposição usa `playbackRate`, que altera os dois.
   Separá-los pede um phase vocoder — próximo passo natural.
-- **Fontes centralizadas que não são voz** (piano ou violão no centro da mixagem) vão em
-  parte para a pista de voz. É o limite de qualquer método baseado em coerência estéreo.
+- **Instrumentos harmônicos centralizados com ataque percussivo** (violão, piano tocando no
+  tempo) continuam confundindo bateria/voz/outros entre si — ver 16.4.3.
+- **Voz em registro grave, perto da faixa do baixo**, ainda vaza pro baixo — é um limite de
+  frequência compartilhada, não um bug (ver 16.4.3).
 - **Gravação mono não produz pista de voz**: sem imagem estéreo não há o que comparar. O
   app continua separando bateria e baixo normalmente.
 - **Espaço em disco**: o navegador costuma liberar alguns GB por domínio. O modo compacto

@@ -296,6 +296,43 @@ function separateSegment(
     }
   }
 
+  // --- Gate de ataque grave (kick) -----------------------------------
+  // A mediana sozinha erra o bumbo: o corpo dele é uma nota grave que dura
+  // mais que a janela de mediana no tempo (kH), então parece "sustentado"
+  // (harmônico) em vez de "transiente" (percussivo), e some pra pista de
+  // baixo. Aqui detectamos o ataque pela ENVELOPE de energia na faixa grave
+  // (que sobe bruscamente a cada batida, mesmo quando a cauda é tonal) e
+  // mantemos esse trecho marcado como percussivo por uma janela de decaída
+  // — como o gate de um sampler de bateria — independente do que a mediana
+  // por bin diria sozinha.
+  const eps0 = 1e-10;
+  const binHz0 = sampleRate / N;
+  const kickMaxBin = Math.max(1, Math.min(bins - 1, Math.round((opt.bassCutoffHz * 1.6) / binHz0)));
+  const lowEnvelope = new Float32Array(frames);
+  for (let f = 0; f < frames; f++) {
+    let e = 0;
+    const base = f * bins;
+    for (let k = 1; k <= kickMaxBin; k++) e += mag[base + k];
+    lowEnvelope[f] = e / kickMaxBin;
+  }
+  const kickGate = new Float32Array(frames);
+  const releaseFrames = Math.max(3, Math.round((0.10 * sampleRate) / hop)); // ~100ms de cauda
+  const releaseCoef = Math.exp(-1 / releaseFrames);
+  let gateVal = 0;
+  for (let f = 0; f < frames; f++) {
+    const prev = f > 0 ? lowEnvelope[f - 1] : lowEnvelope[f];
+    // dispara quando a energia grave sobe bem mais rápido que o release natural —
+    // o limiar (1.5x) veio de comparar 1.3x/1.5x/1.7x/1.9x num mix sintético com
+    // bumbo E baixo tocando juntos: abaixo disso o baixo vaza demais pra bateria,
+    // acima disso o bumbo deixa de ser capturado.
+    if (lowEnvelope[f] > eps0 && lowEnvelope[f] > prev * 1.5 + eps0) {
+      gateVal = 1;
+    } else {
+      gateVal *= releaseCoef;
+    }
+    kickGate[f] = gateVal;
+  }
+
   // --- Máscaras -----------------------------------------------------
   const eps = 1e-10;
   const p = opt.maskPower;
@@ -311,6 +348,24 @@ function separateSegment(
     else if (hz >= fHigh) lowGate[k] = 0;
     else lowGate[k] = 0.5 + 0.5 * Math.cos((Math.PI * (hz - fLow)) / (fHigh - fLow));
   }
+  // Faixa típica de voz cantada: a separação voz/outros hoje se apoia só na
+  // posição estéreo (centralizado = voz), o que confunde qualquer coisa
+  // centralizada — um violão, um piano — com voz. Esse peso não decide
+  // sozinho (ele só reduz a confiança fora da faixa plausível), mas evita
+  // que conteúdo bem grave ou bem agudo vire "voz" só por estar no centro;
+  // o que essa faixa tira da voz volta pra "outros" (a máscara continua
+  // somando 1).
+  const vocalBand = new Float32Array(bins);
+  const vLowFull = 140, vLow = 90, vHighFull = 3800, vHigh = 6500;
+  for (let k = 0; k < bins; k++) {
+    const hz = k * binHz;
+    let w = 1;
+    if (hz < vLow) w = 0;
+    else if (hz < vLowFull) w = (hz - vLow) / (vLowFull - vLow);
+    else if (hz > vHigh) w = 0;
+    else if (hz > vHighFull) w = 1 - (hz - vHighFull) / (vHigh - vHighFull);
+    vocalBand[k] = w;
+  }
 
   const masks: Record<StemName, Float32Array> = {
     vocals: new Float32Array(frames * bins),
@@ -321,6 +376,7 @@ function separateSegment(
 
   for (let f = 0; f < frames; f++) {
     const base = f * bins;
+    const kickAtFrame = kickGate[f];
     for (let k = 0; k < bins; k++) {
       const i = base + k;
       // Só é percussivo se a mediana em frequência dominar a mediana no tempo
@@ -338,6 +394,10 @@ function separateSegment(
         const pp = Math.pow(perc[i], p);
         mPerc = pp / (hp + pp + eps);
       }
+      // O gate de ataque grave "puxa" o bumbo de volta pro percussivo durante
+      // sua decaída natural, mesmo em bins onde a mediana por si só o leria
+      // como sustentado/harmônico.
+      if (k <= kickMaxBin && kickAtFrame > mPerc) mPerc = kickAtFrame;
       const mHarm = 1 - mPerc;
 
       // Coerência estéreo: 1 = fonte centralizada, 0 = totalmente lateral.
@@ -354,10 +414,11 @@ function separateSegment(
       }
 
       const low = lowGate[k];
+      const vocalWeight = coh * vocalBand[k];
       masks.drums[i] = mPerc;
       masks.bass[i] = mHarm * low;
-      masks.vocals[i] = mHarm * (1 - low) * coh;
-      masks.other[i] = mHarm * (1 - low) * (1 - coh);
+      masks.vocals[i] = mHarm * (1 - low) * vocalWeight;
+      masks.other[i] = mHarm * (1 - low) * (1 - vocalWeight);
     }
   }
 

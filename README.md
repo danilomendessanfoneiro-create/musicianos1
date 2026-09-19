@@ -159,8 +159,11 @@ Documentação técnica detalhada, com o funcionamento de cada algoritmo e as li
 - A importação de PDF exige texto selecionável (PDF escaneado não funciona — precisaria de OCR).
 - A detecção de acordes é uma estimativa por análise espectral: funciona bem em gravações limpas e erra
   mais em mixagens densas. Serve como ponto de partida, não como transcrição final.
-- A separação de pistas leva cerca de um quarto da duração da música e tem limites descritos em
-  `DOCUMENTATION.md` — notadamente, gravações mono não produzem pista de voz.
+- A separação de pistas não modela timbre — só posição no tempo/frequência/estéreo. Funciona
+  bem pra bateria, baixo e voz em registro médio/agudo; ainda confunde instrumento harmônico
+  centralizado com ataque percussivo (violão, piano tocando no tempo) e voz em registro grave
+  perto da faixa do baixo. Números e investigação completa em `DOCUMENTATION.md` §16.4 —
+  notadamente, gravações mono também não produzem pista de voz.
 - Transposição e andamento no Estúdio VS andam juntos (usam `playbackRate`); separá-los pede um phase
   vocoder.
 
@@ -170,3 +173,6 @@ Documentação técnica detalhada, com o funcionamento de cada algoritmo e as li
 - OCR para PDFs escaneados.
 - Convite de colaboradores com conta própria num mesmo setlist.
 - Phase vocoder no Estúdio VS, para mudar o tom sem alterar o andamento.
+- Motor de separação baseado em rede neural (Demucs via API paga, por exemplo) para os casos
+  que a heurística atual não resolve — o ponto de troca já está isolado em `stemAudio.ts`
+  (`separateBuffer`), documentado em `DOCUMENTATION.md` §16.2.
